@@ -9,32 +9,28 @@ Experiments comparing **NSGA-III** and **Parallel NSGA3** (multi-island, referen
 - **Plotting**: line plots (IGD/HV by generation) and scatter plots (Pareto front) from disk; see `plot.py`.
 - **Summary loading**: build a single DataFrame from `SUMMARY/*.npy`; see `load_summary.py`.
 
-## Requirements
+## Installation
 
-- Python 3.8+
-- numpy, matplotlib, pandas  
-- **pymoo** is included under `pymoo/`; run from the repo root so `from pymoo...` resolves.
+- **Python**: 3.8+
+- **Dependencies**: numpy, matplotlib, pandas (pymoo is vendored under `pymoo/`).
 
-Install dependencies (pymoo is in-tree):
-
-```bash
-pip install numpy matplotlib pandas
-```
-
-Optional: install pymoo from the repo for development:
+**Recommended: clone repo → create venv → install dependencies**
 
 ```bash
+# 1. Clone the repository
+git clone https://github.com/extradimen/pnsga3.git
 cd pnsga3
-pip install -e .
+
+# 2. Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate   # Linux / macOS
+# or: venv\Scripts\activate   # Windows
+
+# 3. Install dependencies
+pip install -r requirements.txt
 ```
 
-If you do not install pymoo, run scripts from the **repository root** so the local `pymoo` package is on `PYTHONPATH`:
-
-```bash
-cd pnsga3
-export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-python nsga3_experiment.py --help
-```
+Run all commands (experiment, plot) from the **repository root** so the in-tree `pymoo` package is importable. No need to set `PYTHONPATH` if you are in the project directory and use the same Python that has the venv activated.
 
 ## Usage
 
@@ -61,11 +57,9 @@ Output layout under `output_dir` (default `nsga_logs/`):
 
 ### 2. Plot (line + scatter)
 
-From repo root (so `plot` and `pymoo` are importable):
+Run from the repo root (with venv activated):
 
 ```bash
-cd pnsga3
-export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 python plot.py
 ```
 

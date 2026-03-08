@@ -1,4 +1,11 @@
-# Core dependencies (pymoo is in-tree under pymoo/)
-numpy>=1.20
-matplotlib>=3.3
+# pymoo (in-tree) and project dependencies
+# See pymoo/pyproject.toml for upstream pymoo requirements
+numpy>=1.19.3
+scipy>=1.1
+moocore>=0.1.7
+autograd>=1.4
+cma>=3.2.2
+matplotlib>=3
+alive_progress
+Deprecated
 pandas>=1.2
