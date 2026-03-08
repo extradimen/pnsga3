@@ -1,0 +1,76 @@
+[project]
+name = "pymoo"
+description = "Multi-Objective Optimization in Python"
+authors = [{ name = "Julian Blank", email = "blankjul@outlook.com" }]
+readme = "README.rst"
+license = "Apache-2.0"
+classifiers = [
+    'Intended Audience :: Developers',
+    'Intended Audience :: Science/Research',
+    'Operating System :: OS Independent',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
+    'Topic :: Scientific/Engineering',
+    'Topic :: Scientific/Engineering :: Artificial Intelligence',
+    'Topic :: Scientific/Engineering :: Mathematics',
+]
+keywords = ["optimization"]
+dynamic = ["version"]
+urls = { homepage = "https://pymoo.org" }
+requires-python = ">= 3.10"
+dependencies = [
+    "numpy>=1.19.3",
+    "scipy>=1.1",
+    "moocore>=0.1.7",
+    "autograd>=1.4",
+    "cma>=3.2.2",
+    "matplotlib>=3",
+    "alive_progress",
+    "Deprecated",
+]
+
+[build-system]
+requires = ["setuptools>=77", "numpy", "Cython>=0.29"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "pymoo.version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pymoo*"]
+
+[project.optional-dependencies]
+dev = [
+    "numba",
+    "pytest",
+    "nbformat",
+    "jupyter",
+    "pyrecorder",
+    "optproblems",
+    "pandas",
+    "ipython",
+    "ipykernel",
+]
+parallelization = [
+    "joblib",
+    "dask[distributed]",
+    "ray[default]",
+]
+others = [
+    "optuna",
+]
+full = [
+    "numba",
+    "scikit-learn",
+    "pandas",
+    "pymoo[parallelization]",
+    "pymoo[others]",
+]
+
+
