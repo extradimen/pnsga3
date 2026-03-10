@@ -36,7 +36,40 @@ Run all commands (experiment, plot) from the **repository root** so the in-tree 
 
 ### 1. Run experiments (CLI)
 
-All parameters can be passed in one string or separately:
+Recommended usage is to drive experiments from a single YAML config file so that experiments and plots always use the same parameters.
+
+```yaml
+# config/experiments.yaml
+experiments:
+  - name: c1dtlz1_13_16_19
+    problem: c1dtlz1
+    n_var: [12]
+    n_obj: [13, 16, 19]
+    pop_size: [120]
+    n_gen: [50]
+    n_partitions: [3]
+    n_islands: [4]
+    migration_interval: [3]
+    migration_rate: [0.1]
+    seed: [1]
+
+    # Flags
+    pnsga3_only: true
+    output_dir: nsga_logs
+    metrics_every_gen: false   # false = IGD/HV only on last generation
+    hv_enabled: false          # false = disable HV entirely (IGD only)
+    pymoo_timing: true         # true  = print detailed per-generation timing
+```
+
+Run the grid for a given experiment name:
+
+```bash
+python nsga3_experiment.py \
+  --config config/experiments.yaml \
+  --exp_name c1dtlz1_13_16_19
+```
+
+Legacy usage (still supported) – pass all parameters explicitly:
 
 ```bash
 # Default grid (see --help for defaults)
@@ -48,7 +81,7 @@ python nsga3_experiment.py --params "problem=c1dtlz1 n_var=12 n_obj=6,7,8 pop_si
 # Or individual args
 python nsga3_experiment.py --problem c1dtlz1 --n_obj 6,7,8 --pop_size 100,200 --output_dir nsga_logs
 
-# Advanced: timing + IGD/HV control
+# Advanced: timing + IGD/HV control (when not using YAML flags)
 # - --pymoo_timing          print [timing]/[advance]/[survival] each generation (for performance debugging)
 # - --no_metrics_every_gen  compute IGD/HV only on the last generation (SUMMARY still records final IGD/HV)
 # - --no_hv                 disable all HV computations (IGD only, HV columns become NaN)
@@ -67,20 +100,20 @@ Output layout under `output_dir` (default `nsga_logs/`):
 
 ### 2. Plot (line + scatter)
 
-Run from the repo root (with venv activated):
+Run from the repo root (with venv activated), using the **same YAML config and experiment name** as the grid runner:
 
 ```bash
-python plot.py
+python plot.py \
+  --config config/experiments.yaml \
+  --exp_name c1dtlz1_13_16_19 \
+  --mode both    # or: line / scatter
 ```
 
-Edit the `if __name__ == "__main__"` block in `plot.py` to set `problem_name`, list args, and `output_dir`, or call from your own script:
+This will:
 
-```python
-from plot import plot_line_by_problem_from_lists, plot_scatter_from_lists
-
-plot_line_by_problem_from_lists("c1dtlz1", n_var_list=[12], n_obj_list=[6,8], ...)
-plot_scatter_from_lists("c1dtlz1", ..., output_dir="nsga_logs")
-```
+- Plot IGD/HV line charts for the parameter combination selected by the config (`metrics=("igd","hv")` by default).
+- Plot ParallelNSGA3 scatter plots (objective space fronts every few generations) into:
+  - `output_dir/<problem>/SCATTER/*.png` (separate from the npz/npy caches).
 
 ### 3. Load summary DataFrame
 
