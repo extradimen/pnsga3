@@ -59,6 +59,7 @@ experiments:
     metrics_every_gen: false
     hv_enabled: false
     pymoo_timing: true
+    plot_after_run: false 
 ```
 
 **Config parameter reference:**
