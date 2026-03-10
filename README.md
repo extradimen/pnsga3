@@ -47,6 +47,16 @@ python nsga3_experiment.py --params "problem=c1dtlz1 n_var=12 n_obj=6,7,8 pop_si
 
 # Or individual args
 python nsga3_experiment.py --problem c1dtlz1 --n_obj 6,7,8 --pop_size 100,200 --output_dir nsga_logs
+
+# Advanced: timing + IGD/HV control
+# - --pymoo_timing          print [timing]/[advance]/[survival] each generation (for performance debugging)
+# - --no_metrics_every_gen  compute IGD/HV only on the last generation (SUMMARY still records final IGD/HV)
+# - --no_hv                 disable all HV computations (IGD only, HV columns become NaN)
+python nsga3_experiment.py \
+  --params "problem=c1dtlz1 n_var=12 n_obj=13,16,19 pop_size=120 n_gen=50 n_partitions=3 n_islands=4 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=1 output_dir=nsga_logs" \
+  --pymoo_timing \
+  --no_metrics_every_gen \
+  --no_hv
 ```
 
 Output layout under `output_dir` (default `nsga_logs/`):
