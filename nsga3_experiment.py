@@ -13,6 +13,9 @@ import itertools
 import os
 import pandas as pd
 import time
+from typing import Any, Dict, List
+
+import yaml
 
 from pymoo.algorithms.moo.nsga3 import NSGA3, ParallelNSGA3
 from pymoo.optimize import minimize
@@ -45,6 +48,89 @@ def build_problem(problem_name, n_var, n_obj, difficulty_index=9):
         return get_problem(problem_name, n_var=n_var)
     else:
         return get_problem(problem_name, n_var=n_var, n_obj=n_obj)
+
+
+def _ensure_list(x):
+    """Ensure a value is a list (used for config-driven experiments)."""
+    if isinstance(x, list):
+        return x
+    return [x]
+
+
+def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, Any]:
+    """
+    Load one experiment definition from a YAML config file.
+
+    Expected structure:
+
+    experiments:
+      - name: my_experiment
+        problem: c1dtlz1
+        n_var: [12]
+        n_obj: [13,16,19]
+        pop_size: [120]
+        n_gen: [50]
+        n_partitions: [3]
+        n_islands: [4]
+        migration_interval: [3]
+        migration_rate: [0.1]
+        seed: [1]
+        pnsga3_only: true
+        output_dir: nsga_logs
+        metrics_every_gen: false
+        hv_enabled: false
+        pymoo_timing: true
+    """
+    cfg_path = Path(path)
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+    with cfg_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    experiments: List[Dict[str, Any]] = cfg.get("experiments") or []
+    if not experiments:
+        raise ValueError(f"No 'experiments' list found in config: {cfg_path}")
+
+    exp: Dict[str, Any]
+    if exp_name:
+        matches = [e for e in experiments if e.get("name") == exp_name]
+        if not matches:
+            available = [e.get("name") for e in experiments]
+            raise ValueError(f"Experiment '{exp_name}' not found in config. Available: {available}")
+        exp = matches[0]
+    else:
+        if len(experiments) > 1:
+            names = [e.get("name") for e in experiments]
+            raise ValueError(
+                f"Config {cfg_path} defines multiple experiments. "
+                f"Please select one via --exp_name. Available: {names}"
+            )
+        exp = experiments[0]
+
+    def get_list(key: str, default=None):
+        if key not in exp:
+            return default
+        return _ensure_list(exp[key])
+
+    out: Dict[str, Any] = {}
+    out["problem_list"] = get_list("problem", ["c1dtlz1"])
+    out["n_var_list"] = get_list("n_var", [12])
+    out["n_obj_list"] = get_list("n_obj", [6])
+    out["pop_size_list"] = get_list("pop_size", [100])
+    out["n_gen_list"] = get_list("n_gen", [50])
+    out["n_partitions_list"] = get_list("n_partitions", [6])
+    out["n_islands_list"] = get_list("n_islands", [6])
+    out["migration_interval_list"] = get_list("migration_interval", [3])
+    out["migration_rate_list"] = get_list("migration_rate", [0.1])
+    out["seed_list"] = get_list("seed", [1])
+
+    out["pnsga3_only"] = bool(exp.get("pnsga3_only", False))
+    out["output_dir"] = exp.get("output_dir", "nsga_logs")
+    out["metrics_every_gen"] = bool(exp.get("metrics_every_gen", True))
+    out["hv_enabled"] = bool(exp.get("hv_enabled", True))
+    out["pymoo_timing"] = bool(exp.get("pymoo_timing", False))
+
+    return out
 
 
 def _nsga3_cache_path(output_dir, problem_name, n_var, n_obj, pop_size, n_gen, seed, n_partitions):
@@ -789,6 +875,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(
         description="NSGA3 / ParallelNSGA3 grid experiment. Use either individual args or a single --params string."
     )
+    p.add_argument("--config", default=None, help="Path to YAML config file with experiments[].")
+    p.add_argument("--exp_name", default=None, help="Experiment name in config (experiments[].name).")
     p.add_argument("--params", default=None, help=
         "All params in one string: key=value pairs space-separated, lists comma-separated. "
         "Example: problem=c1dtlz1 n_var=12 n_obj=6,7,8 pop_size=100,105 n_gen=50 n_partitions=6 "
@@ -815,7 +903,26 @@ if __name__ == "__main__":
     p.add_argument("--no_hv", action="store_true", help="Disable HV computation entirely (faster); IGD only.")
     args = p.parse_args()
 
-    if args.params:
+    # Highest priority: YAML config if provided
+    if args.config is not None:
+        cfg = _load_experiment_from_config(args.config, args.exp_name)
+        problem_list = cfg["problem_list"]
+        n_var_list = cfg["n_var_list"]
+        n_obj_list = cfg["n_obj_list"]
+        pop_size_list = cfg["pop_size_list"]
+        n_gen_list = cfg["n_gen_list"]
+        n_partitions_list = cfg["n_partitions_list"]
+        n_islands_list = cfg["n_islands_list"]
+        migration_interval_list = cfg["migration_interval_list"]
+        migration_rate_list = cfg["migration_rate_list"]
+        seed_list = cfg["seed_list"]
+        pnsga3_only = cfg["pnsga3_only"]
+        output_dir = cfg["output_dir"]
+        metrics_every_gen = cfg["metrics_every_gen"]
+        hv_enabled = cfg["hv_enabled"]
+        pymoo_timing = cfg["pymoo_timing"]
+
+    elif args.params:
         # All parameters from single --params string (ignore other CLI args for grid)
         parsed = _parse_params_string(args.params)
         problem_list = parsed.get("problem_list", ["c1dtlz1"])
@@ -849,12 +956,10 @@ if __name__ == "__main__":
         pymoo_timing = getattr(args, "pymoo_timing", False)
         metrics_every_gen = not getattr(args, "no_metrics_every_gen", False)
         hv_enabled = not getattr(args, "no_hv", False)
-
-    if getattr(args, "no_metrics_every_gen", False):
-        metrics_every_gen = False
-
-    if getattr(args, "no_hv", False):
-        hv_enabled = False
+        if getattr(args, "no_metrics_every_gen", False):
+            metrics_every_gen = False
+        if getattr(args, "no_hv", False):
+            hv_enabled = False
 
     if pymoo_timing:
         os.environ["PYMOO_TIMING"] = "1"

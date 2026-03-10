@@ -9,3 +9,4 @@ matplotlib>=3
 alive_progress
 Deprecated
 pandas>=1.2
+pyyaml>=6

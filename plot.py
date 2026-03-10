@@ -24,6 +24,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional, Dict, Any, List, Tuple
 
+import yaml
+
 DEFAULT_OUTPUT_DIR = "nsga_logs"
 
 
@@ -596,6 +598,7 @@ def plot_scatter_parallel_nsga3(
     if not run_dir.exists():
         print(f"[plot_scatter_parallel_nsga3] Directory does not exist: {run_dir}")
         return None
+    scatter_dir = base / "SCATTER"
 
     # Generations to plot: 0, gen_interval, 2*gen_interval, ... <= n_gen
     gen_list = list(range(0, n_gen + 1, gen_interval))
@@ -696,7 +699,7 @@ def plot_scatter_parallel_nsga3(
     fig.tight_layout()
 
     if save_path is None:
-        save_path = run_dir / (
+        save_path = scatter_dir / (
             f"scatter_var{n_var}_obj{n_obj}_pop{pop_size}_gen{n_gen}"
             f"_ni{n_islands}_mi{migration_interval}_mr{_mr_str(migration_rate)}"
             + (f"_np{n_partitions}" if n_partitions is not None else "") + f"_s{seed}.png"
@@ -714,37 +717,112 @@ def plot_scatter_parallel_nsga3(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import os
-    os.chdir(os.path.dirname(os.path.abspath(__file__)) or ".")
+    import argparse
 
-    # Use functions defined in this file
-    # Line charts: retrieve by param lists, one figure per problem, different algo params = different curves
-    plot_line_by_problem_from_lists(
-        problem_name="c1dtlz1",
-        n_var_list=[12],
-        n_obj_list=[6, 8, 10],
-        pop_size_list=[1000, 1200, 1400],
-        n_gen_list=[20],
-        seed_list=[1],
-        n_islands_list=[6, 8],
-        migration_interval_list=[3],
-        migration_rate_list=[0.1],
-        n_partitions_list=[6, 12],
-        output_dir="nsga_logs",
+    parser = argparse.ArgumentParser(
+        description="Plot NSGA3 / ParallelNSGA3 results from disk using the same experiment parameters as the grid runner."
     )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to YAML config file with experiments[]. If omitted, you must call plotting functions from Python.",
+    )
+    parser.add_argument(
+        "--exp_name",
+        default=None,
+        help="Experiment name in config (experiments[].name). If config contains multiple experiments, this is required.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["line", "scatter", "both"],
+        default="both",
+        help="What to plot: line charts (IGD/HV), scatter plots, or both.",
+    )
+    args = parser.parse_args()
 
-    # Scatter: retrieve by param lists, one subplot every 5 gens; n_obj>=3 default 3D
-    plot_scatter_from_lists(
-        problem_name="c1dtlz1",
-        n_var_list=[12],
-        n_obj_list=[6, 8, 10],
-        pop_size_list=[1000, 1200, 1400],
-        n_gen_list=[20],
-        seed_list=[1],
-        n_islands_list=[6, 8],
-        migration_interval_list=[3],
-        migration_rate_list=[0.1],
-        n_partitions_list=[6, 12],
-        output_dir="nsga_logs",
-        gen_interval=5,
-    )
+    if args.config is None:
+        raise SystemExit(
+            "Please provide --config pointing to the same YAML file used for nsga3_experiment.py (with experiments[].)."
+        )
+
+    cfg_path = Path(args.config)
+    if not cfg_path.exists():
+        raise SystemExit(f"Config file not found: {cfg_path}")
+
+    with cfg_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    experiments: List[Dict[str, Any]] = cfg.get("experiments") or []
+    if not experiments:
+        raise SystemExit(f"No 'experiments' list found in config: {cfg_path}")
+
+    if args.exp_name:
+        matches = [e for e in experiments if e.get("name") == args.exp_name]
+        if not matches:
+            names = [e.get("name") for e in experiments]
+            raise SystemExit(f"Experiment '{args.exp_name}' not found in config. Available: {names}")
+        exp = matches[0]
+    else:
+        if len(experiments) > 1:
+            names = [e.get("name") for e in experiments]
+            raise SystemExit(
+                "Config defines multiple experiments. Please select one via --exp_name. "
+                f"Available: {names}"
+            )
+        exp = experiments[0]
+
+    def _first(key: str, default=None):
+        """Get first value for key from experiment, turning list into scalar where necessary."""
+        if key not in exp:
+            return default
+        v = exp[key]
+        if isinstance(v, list):
+            if not v:
+                return default
+            return v[0]
+        return v
+
+    problem_name = exp.get("problem", "c1dtlz1")
+    n_var = _first("n_var", 12)
+    n_obj = _first("n_obj", 6)
+    pop_size = _first("pop_size", 100)
+    n_gen = _first("n_gen", 50)
+    seed = _first("seed", 1)
+    output_dir = exp.get("output_dir", DEFAULT_OUTPUT_DIR)
+    n_islands = _first("n_islands", 6)
+    migration_interval = _first("migration_interval", 3)
+    migration_rate = _first("migration_rate", 0.1)
+    n_partitions = _first("n_partitions", None)
+
+    # Line plots (IGD/HV history)
+    if args.mode in ("line", "both"):
+        plot_line_by_problem_from_lists(
+            problem_name=problem_name,
+            n_var_list=[n_var],
+            n_obj_list=[n_obj],
+            pop_size_list=[pop_size],
+            n_gen_list=[n_gen],
+            seed_list=[seed],
+            n_islands_list=[n_islands],
+            migration_interval_list=[migration_interval],
+            migration_rate_list=[migration_rate],
+            n_partitions_list=[n_partitions] if n_partitions is not None else [None],
+            output_dir=output_dir,
+        )
+
+    # Scatter plots (ParallelNSGA3 fronts over generations)
+    if args.mode in ("scatter", "both"):
+        plot_scatter_from_lists(
+            problem_name=problem_name,
+            n_var_list=[n_var],
+            n_obj_list=[n_obj],
+            pop_size_list=[pop_size],
+            n_gen_list=[n_gen],
+            seed_list=[seed],
+            n_islands_list=[n_islands],
+            migration_interval_list=[migration_interval],
+            migration_rate_list=[migration_rate],
+            n_partitions_list=[n_partitions] if n_partitions is not None else [None],
+            output_dir=output_dir,
+            gen_interval=5,
+        )
