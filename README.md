@@ -53,13 +53,41 @@ experiments:
     migration_rate: [0.1]
     seed: [1]
 
-    # Flags
+    # Flags (see config/experiments.yaml for full parameter reference)
     pnsga3_only: true
     output_dir: exp_logs
-    metrics_every_gen: false   # false = IGD/HV only on last generation
-    hv_enabled: false          # false = disable HV entirely (IGD only)
-    pymoo_timing: true         # true  = print detailed per-generation timing
+    metrics_every_gen: false
+    hv_enabled: false
+    pymoo_timing: true
 ```
+
+**Config parameter reference:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | str | Experiment identifier; used by `--exp_name` and in plot output paths. |
+| `problem` | str | Problem name (e.g. `c1dtlz1`, `dtlz1`). |
+| `n_var` | list[int] | Number of decision variables. |
+| `n_obj` | list[int] | Number of objectives. |
+| `pop_size` | list[int] | Population size. |
+| `n_gen` | list[int] | Number of generations. |
+| `n_partitions` | list[int] | Reference direction partitions. |
+| `n_islands` | list[int] | Number of islands in ParallelNSGA3. |
+| `migration_interval` | list[int] | Generations between migrations. |
+| `migration_rate` | list[float] | Fraction of population to migrate (0.0–1.0). |
+| `seed` | list[int] | Random seed(s); multiple = multiple runs per config. |
+| `output_dir` | str | Directory for logs and caches (default: `exp_logs`). |
+
+**Boolean flags:**
+
+| Flag | `true` | `false` |
+|------|--------|---------|
+| `pnsga3_only` | Run only ParallelNSGA3; skip NSGA3 baseline. | Run both NSGA3 and ParallelNSGA3 for comparison. |
+| `metrics_every_gen` | Compute IGD/HV every generation (needed for line plots). | Compute IGD/HV only on last generation (faster; SUMMARY still has final values). |
+| `hv_enabled` | Compute Hypervolume (HV) in addition to IGD. | Disable HV; only IGD/GD (HV columns = NaN; faster for high n_obj). |
+| `pymoo_timing` | Print per-generation timing (for debugging). | No per-generation timing output. |
+
+See `config/experiments.yaml` for inline comments on each parameter.
 
 Run the grid for a given experiment name:
 
@@ -103,11 +131,13 @@ Output layout under `output_dir` (default `exp_logs/`):
 Run from the repo root (with venv activated), using the **same YAML config and experiment name** as the grid runner:
 
 ```bash
+# --mode: line | scatter | both
+# --metrics: igd | hv | both (for line plots only)
 python plot.py \
   --config config/experiments.yaml \
   --exp_name c1dtlz1_13_16_19 \
-  --mode both \      # line | scatter | both
-  --metrics both     # igd | hv | both (for line plots only)
+  --mode both \
+  --metrics both
 ```
 
 **Arguments:**
