@@ -106,14 +106,28 @@ Run from the repo root (with venv activated), using the **same YAML config and e
 python plot.py \
   --config config/experiments.yaml \
   --exp_name c1dtlz1_13_16_19 \
-  --mode both    # or: line / scatter
+  --mode both \      # line | scatter | both
+  --metrics both     # igd | hv | both (for line plots only)
 ```
 
-This will:
+**Arguments:**
 
-- Plot IGD/HV line charts for the parameter combination selected by the config (`metrics=("igd","hv")` by default).
-- Plot ParallelNSGA3 scatter plots (objective space fronts every few generations) into:
-  - `output_dir/<problem>/SCATTER/*.png` (separate from the npz/npy caches).
+| Argument | Description |
+|----------|-------------|
+| `--config` | Path to YAML config (required). |
+| `--exp_name` | Experiment name in config; required when config has multiple experiments. |
+| `--mode` | `line` — IGD/HV line charts only; `scatter` — Pareto front scatter only; `both` — both (default). |
+| `--metrics` | For line plots: `igd` — IGD only; `hv` — HV only; `both` — both metrics (default). |
+
+**Line chart grouping:**
+
+- **One figure per** `(n_var, n_obj, pop_size, n_gen, n_partitions)` — e.g. 3×2×1×1 = 6 figures for `n_obj=[7,8,9]`, `pop_size=[120,150]`, `n_gen=[50]`, `n_partitions=[3]`.
+- **Curves within each figure** = PNSGA3 configs `(n_islands, migration_interval, migration_rate, seed)` + NSGA3 baseline (one per seed). NSGA3 uses dark gray; PNSGA3 uses color.
+
+**Output paths** (plots are grouped by `exp_name` to avoid overwriting):
+
+- Line plots: `output_dir/<problem>/line_plots/<exp_name>/*.png`
+- Scatter: `output_dir/<problem>/SCATTER/<exp_name>/*.png`
 
 ### 3. Export summary to CSV
 

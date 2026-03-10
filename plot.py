@@ -240,6 +240,7 @@ def plot_line_by_problem(
     figsize_per_metric: Tuple[float, float] = (8, 5),
     save_dir: Optional[str] = None,
     title_prefix: str = "",
+    exp_name: Optional[str] = None,
 ) -> List[Path]:
     """
     Plot line charts by problem: one figure per (problem, n_var, n_obj, pop_size, n_gen, n_partitions);
@@ -263,7 +264,7 @@ def plot_line_by_problem(
     nsga3_dir = base / "NSGA3"
     pnsga3_dir = base / "ParallelNSGA3"
     if save_dir is None:
-        save_dir = base / "line_plots"
+        save_dir = base / "line_plots" / exp_name if exp_name else base / "line_plots"
     else:
         save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -424,6 +425,7 @@ def plot_line_by_problem_from_lists(
     figsize_per_metric: Tuple[float, float] = (8, 5),
     save_dir: Optional[str] = None,
     title_prefix: str = "",
+    exp_name: Optional[str] = None,
 ) -> List[Path]:
     """
     Plot line charts: one figure per (n_var, n_obj, pop_size, n_gen, n_partitions);
@@ -454,6 +456,7 @@ def plot_line_by_problem_from_lists(
             figsize_per_metric=figsize_per_metric,
             save_dir=save_dir,
             title_prefix=title_prefix,
+            exp_name=exp_name,
         )
         all_saved.extend(saved)
     return all_saved
@@ -475,6 +478,7 @@ def plot_scatter_from_lists(
     gen_interval: int = 5,
     obj_indices: Optional[Tuple[int, ...]] = None,
     figsize_subplot: Tuple[float, float] = (5, 5),
+    exp_name: Optional[str] = None,
 ) -> List[Path]:
     """
     Retrieve by param lists and plot one set of scatter plots per (problem + algo params); ParallelNSGA3 only.
@@ -513,6 +517,7 @@ def plot_scatter_from_lists(
                 gen_interval=gen_interval,
                 obj_indices=obj_indices,
                 figsize_subplot=figsize_subplot,
+                exp_name=exp_name,
             )
             if path is not None:
                 saved.append(path)
@@ -534,6 +539,7 @@ def plot_scatter_from_lists(
                 gen_interval=gen_interval,
                 obj_indices=obj_indices,
                 figsize_subplot=figsize_subplot,
+                exp_name=exp_name,
             )
             if path is not None:
                 saved.append(path)
@@ -561,6 +567,7 @@ def plot_scatter_parallel_nsga3(
     obj_indices: Optional[Tuple[int, ...]] = None,
     figsize_subplot: Tuple[float, float] = (5, 5),
     save_path: Optional[str] = None,
+    exp_name: Optional[str] = None,
 ) -> Optional[Path]:
     """
     For one ParallelNSGA3 param set, plot one set of scatter plots: one subplot every gen_interval generations (e.g. 20 gens -> 0, 5, 10, 15, 4 subplots).
@@ -575,7 +582,7 @@ def plot_scatter_parallel_nsga3(
     if not run_dir.exists():
         print(f"[plot_scatter_parallel_nsga3] Directory does not exist: {run_dir}")
         return None
-    scatter_dir = base / "SCATTER"
+    scatter_dir = base / "SCATTER" / exp_name if exp_name else base / "SCATTER"
 
     # Generations to plot: 0, gen_interval, 2*gen_interval, ... <= n_gen
     gen_list = list(range(0, n_gen + 1, gen_interval))
@@ -715,6 +722,12 @@ if __name__ == "__main__":
         default="both",
         help="What to plot: line charts (IGD/HV), scatter plots, or both.",
     )
+    parser.add_argument(
+        "--metrics",
+        choices=["igd", "hv", "both"],
+        default="both",
+        help="For line plots: IGD only, HV only, or both (default: both).",
+    )
     args = parser.parse_args()
 
     if args.config is None:
@@ -768,6 +781,8 @@ if __name__ == "__main__":
     migration_interval_list = _to_list("migration_interval", 3)
     migration_rate_list = _to_list("migration_rate", 0.1)
     output_dir = exp.get("output_dir", DEFAULT_OUTPUT_DIR)
+    exp_name = exp.get("name")
+    metrics = ("igd", "hv") if args.metrics == "both" else (args.metrics,)
 
     # Line plots (IGD/HV history): chart=(n_var,n_obj,pop_size,n_gen,n_partitions), curves=(n_islands,mi,mr,seed)+NSGA3
     if args.mode in ("line", "both"):
@@ -783,6 +798,8 @@ if __name__ == "__main__":
             migration_interval_list=migration_interval_list,
             migration_rate_list=migration_rate_list,
             output_dir=output_dir,
+            exp_name=exp_name,
+            metrics=metrics,
         )
 
     # Scatter plots (ParallelNSGA3 fronts over generations)
@@ -800,4 +817,5 @@ if __name__ == "__main__":
             n_partitions_list=n_partitions_list,
             output_dir=output_dir,
             gen_interval=5,
+            exp_name=exp_name,
         )
