@@ -46,3 +46,8 @@ experiments:
     #   true  = Print [timing]/[advance]/[survival] each generation (for performance debugging)
     #   false = No per-generation timing output
     pymoo_timing: true
+
+    # plot_after_run:
+    #   true  = After each run, show a figure (IGD/HV curves + Pareto front scatter) and block until closed
+    #   false = Do not show figure after each run (for batch/grid; use plot.py later for charts)
+    plot_after_run: false

@@ -80,6 +80,7 @@ def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, A
         metrics_every_gen: false
         hv_enabled: false
         pymoo_timing: true
+        plot_after_run: false   # false = do not show figure after each run (for grid)
     """
     cfg_path = Path(path)
     if not cfg_path.exists():
@@ -129,6 +130,7 @@ def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, A
     out["metrics_every_gen"] = bool(exp.get("metrics_every_gen", True))
     out["hv_enabled"] = bool(exp.get("hv_enabled", True))
     out["pymoo_timing"] = bool(exp.get("pymoo_timing", False))
+    out["plot_after_run"] = bool(exp.get("plot_after_run", True))
 
     return out
 
@@ -388,8 +390,9 @@ def run_parallel_nsga3_experiment(
     pnsga3_only=False,
     metrics_every_gen=True,
     hv_enabled=True,
+    plot_after_run=True,
 ):
-    """Compare NSGA-III and ParallelNSGA3 under given parameters and plot IGD/HV curves + front scatter. If pnsga3_only=True, run only PNSGA3 and skip NSGA3. metrics_every_gen: if True compute IGD/HV every generation; if False only on last generation (faster, SUMMARY still has final IGD/HV)."""
+    """Compare NSGA-III and ParallelNSGA3 under given parameters and plot IGD/HV curves + front scatter. If pnsga3_only=True, run only PNSGA3 and skip NSGA3. metrics_every_gen: if True compute IGD/HV every generation; if False only on last generation (faster, SUMMARY still has final IGD/HV). plot_after_run: if True show a figure (IGD/HV + scatter) after each run and block until closed; if False skip the figure (for batch/grid runs)."""
 
     print("  [setup] building problem...", flush=True)
     problem = build_problem(problem_name, n_var, n_obj, difficulty_index)
@@ -579,69 +582,71 @@ def run_parallel_nsga3_experiment(
     }
     np.save(pnsga3_result_path, pnsga3_plot_data)
 
-    # 5. Plots: IGD/HV curves + scatters
-    gens_nsga3 = np.arange(1, len(igd_hist_nsga3) + 1)
-    gens_pnsga3 = np.arange(1, len(igd_hist_pnsga3) + 1)
+    # 5. Plots: IGD/HV curves + scatters (optional; set plot_after_run=False to skip and avoid blocking)
+    if plot_after_run:
+        gens_nsga3 = np.arange(1, len(igd_hist_nsga3) + 1)
+        gens_pnsga3 = np.arange(1, len(igd_hist_pnsga3) + 1)
 
-    fig = plt.figure(figsize=(12, 10))
+        fig = plt.figure(figsize=(12, 10))
 
-    ax_igd = fig.add_subplot(2, 2, 1)
-    ax_igd.plot(gens_nsga3, igd_hist_nsga3, label=f"NSGA-III (final IGD={igd_nsga3:.3g})")
-    ax_igd.plot(gens_pnsga3, igd_hist_pnsga3, label=f"ParallelNSGA3 (final IGD={igd_pnsga3:.3g})")
-    ax_igd.set_xlabel("Generation")
-    ax_igd.set_ylabel("IGD (lower is better)")
-    ax_igd.set_title(f"IGD vs. Generations ({problem_name})")
-    ax_igd.grid(True, alpha=0.3)
-    ax_igd.legend()
+        ax_igd = fig.add_subplot(2, 2, 1)
+        ax_igd.plot(gens_nsga3, igd_hist_nsga3, label=f"NSGA-III (final IGD={igd_nsga3:.3g})")
+        ax_igd.plot(gens_pnsga3, igd_hist_pnsga3, label=f"ParallelNSGA3 (final IGD={igd_pnsga3:.3g})")
+        ax_igd.set_xlabel("Generation")
+        ax_igd.set_ylabel("IGD (lower is better)")
+        ax_igd.set_title(f"IGD vs. Generations ({problem_name})")
+        ax_igd.grid(True, alpha=0.3)
+        ax_igd.legend()
 
-    ax_hv = fig.add_subplot(2, 2, 2)
-    ax_hv.plot(gens_nsga3, hv_hist_nsga3, label=f"NSGA-III (final HV={hv_nsga3:.3g})")
-    ax_hv.plot(gens_pnsga3, hv_hist_pnsga3, label=f"ParallelNSGA3 (final HV={hv_pnsga3:.3g})")
-    ax_hv.set_xlabel("Generation")
-    ax_hv.set_ylabel("Hypervolume (higher is better)")
-    ax_hv.set_title(f"HV vs. Generations ({problem_name})")
-    ax_hv.grid(True, alpha=0.3)
-    ax_hv.legend()
+        ax_hv = fig.add_subplot(2, 2, 2)
+        ax_hv.plot(gens_nsga3, hv_hist_nsga3, label=f"NSGA-III (final HV={hv_nsga3:.3g})")
+        ax_hv.plot(gens_pnsga3, hv_hist_pnsga3, label=f"ParallelNSGA3 (final HV={hv_pnsga3:.3g})")
+        ax_hv.set_xlabel("Generation")
+        ax_hv.set_ylabel("Hypervolume (higher is better)")
+        ax_hv.set_title(f"HV vs. Generations ({problem_name})")
+        ax_hv.grid(True, alpha=0.3)
+        ax_hv.legend()
 
-    if problem.n_obj >= 3:
-        ax_scatter_nsga3 = fig.add_subplot(2, 2, 3, projection='3d')
-        ax_scatter_nsga3.scatter(F_nsga3[:, 0], F_nsga3[:, 1], F_nsga3[:, 2],
-                                 s=8, c='tab:blue')
-        ax_scatter_nsga3.set_title(
-            f"NSGA-III Front\nIGD={igd_nsga3:.4f}, HV={hv_nsga3:.4f}"
-        )
-        ax_scatter_nsga3.set_xlabel("f1")
-        ax_scatter_nsga3.set_ylabel("f2")
-        ax_scatter_nsga3.set_zlabel("f3")
+        if problem.n_obj >= 3:
+            ax_scatter_nsga3 = fig.add_subplot(2, 2, 3, projection='3d')
+            ax_scatter_nsga3.scatter(F_nsga3[:, 0], F_nsga3[:, 1], F_nsga3[:, 2],
+                                     s=8, c='tab:blue')
+            ax_scatter_nsga3.set_title(
+                f"NSGA-III Front\nIGD={igd_nsga3:.4f}, HV={hv_nsga3:.4f}"
+            )
+            ax_scatter_nsga3.set_xlabel("f1")
+            ax_scatter_nsga3.set_ylabel("f2")
+            ax_scatter_nsga3.set_zlabel("f3")
 
-        ax_scatter_pnsga3 = fig.add_subplot(2, 2, 4, projection='3d')
-        ax_scatter_pnsga3.scatter(F_pnsga3[:, 0], F_pnsga3[:, 1], F_pnsga3[:, 2],
-                                  s=8, c='tab:orange')
-        ax_scatter_pnsga3.set_title(
-            f"ParallelNSGA3 Front\nIGD={igd_pnsga3:.4f}, HV={hv_pnsga3:.4f}"
-        )
-        ax_scatter_pnsga3.set_xlabel("f1")
-        ax_scatter_pnsga3.set_ylabel("f2")
-        ax_scatter_pnsga3.set_zlabel("f3")
-    else:
-        ax_scatter_nsga3 = fig.add_subplot(2, 2, 3)
-        ax_scatter_nsga3.scatter(F_nsga3[:, 0], F_nsga3[:, 1], s=8, c='tab:blue')
-        ax_scatter_nsga3.set_title(
-            f"NSGA-III Front\nIGD={igd_nsga3:.4f}, HV={hv_nsga3:.4f}"
-        )
-        ax_scatter_nsga3.set_xlabel("f1")
-        ax_scatter_nsga3.set_ylabel("f2")
+            ax_scatter_pnsga3 = fig.add_subplot(2, 2, 4, projection='3d')
+            ax_scatter_pnsga3.scatter(F_pnsga3[:, 0], F_pnsga3[:, 1], F_pnsga3[:, 2],
+                                      s=8, c='tab:orange')
+            ax_scatter_pnsga3.set_title(
+                f"ParallelNSGA3 Front\nIGD={igd_pnsga3:.4f}, HV={hv_pnsga3:.4f}"
+            )
+            ax_scatter_pnsga3.set_xlabel("f1")
+            ax_scatter_pnsga3.set_ylabel("f2")
+            ax_scatter_pnsga3.set_zlabel("f3")
+        else:
+            ax_scatter_nsga3 = fig.add_subplot(2, 2, 3)
+            ax_scatter_nsga3.scatter(F_nsga3[:, 0], F_nsga3[:, 1], s=8, c='tab:blue')
+            ax_scatter_nsga3.set_title(
+                f"NSGA-III Front\nIGD={igd_nsga3:.4f}, HV={hv_nsga3:.4f}"
+            )
+            ax_scatter_nsga3.set_xlabel("f1")
+            ax_scatter_nsga3.set_ylabel("f2")
 
-        ax_scatter_pnsga3 = fig.add_subplot(2, 2, 4)
-        ax_scatter_pnsga3.scatter(F_pnsga3[:, 0], F_pnsga3[:, 1], s=8, c='tab:orange')
-        ax_scatter_pnsga3.set_title(
-            f"ParallelNSGA3 Front\nIGD={igd_pnsga3:.4f}, HV={hv_pnsga3:.4f}"
-        )
-        ax_scatter_pnsga3.set_xlabel("f1")
-        ax_scatter_pnsga3.set_ylabel("f2")
+            ax_scatter_pnsga3 = fig.add_subplot(2, 2, 4)
+            ax_scatter_pnsga3.scatter(F_pnsga3[:, 0], F_pnsga3[:, 1], s=8, c='tab:orange')
+            ax_scatter_pnsga3.set_title(
+                f"ParallelNSGA3 Front\nIGD={igd_pnsga3:.4f}, HV={hv_pnsga3:.4f}"
+            )
+            ax_scatter_pnsga3.set_xlabel("f1")
+            ax_scatter_pnsga3.set_ylabel("f2")
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
+        plt.close(fig)
 
     summary = {
         "problem_name": problem_name,
@@ -698,10 +703,11 @@ def run_grid(
     num_workers=None,
     metrics_every_gen=True,
     hv_enabled=True,
+    plot_after_run=True,
 ):
     """Run the full parameter grid; all list args are iterables (e.g. lists from CLI).
     If server_index, num_servers, worker_index, num_workers are set, only run tasks assigned to this (server, worker).
-    """
+    plot_after_run: if False, do not show the IGD/HV+scatter figure after each run (no blocking)."""
     results = []
     _total_lens = (
         len(problem_list),
@@ -799,6 +805,7 @@ def run_grid(
                 pnsga3_only=pnsga3_only,
                 metrics_every_gen=metrics_every_gen,
                 hv_enabled=hv_enabled,
+                plot_after_run=plot_after_run,
             )
         results.append(summary)
     return pd.DataFrame(results)
@@ -818,7 +825,7 @@ def _parse_params_string(s: str):
     List values are comma-separated (e.g. n_obj=6,7,8); spaces after commas are allowed (e.g. n_var=10, 12).
     If a token has no "=", it is appended to the previous value (so seed=1 , 2 => seed=[1,2]).
     Keys: problem, n_var, n_obj, pop_size, n_gen, n_partitions, n_islands, migration_interval,
-    migration_rate, seed, pnsga3_only, output_dir, pymoo_timing, metrics_every_gen, hv_enabled.
+    migration_rate, seed, pnsga3_only, output_dir, pymoo_timing, metrics_every_gen, hv_enabled, plot_after_run.
     """
     out = {}
     parts = s.split()
@@ -867,6 +874,8 @@ def _parse_params_string(s: str):
             out["hv_enabled"] = v in ("1", "true", "True", "yes")
         elif k == "output_dir":
             out["output_dir"] = v
+        elif k == "plot_after_run":
+            out["plot_after_run"] = v in ("1", "true", "True", "yes")
     return out
 
 
@@ -901,6 +910,7 @@ if __name__ == "__main__":
     p.add_argument("--pymoo_timing", action="store_true", help="Print [timing] and [survival] each gen (env PYMOO_TIMING=1).")
     p.add_argument("--no_metrics_every_gen", action="store_true", help="Only compute IGD/HV on last generation (faster); SUMMARY still has final IGD/HV.")
     p.add_argument("--no_hv", action="store_true", help="Disable HV computation entirely (faster); IGD only.")
+    p.add_argument("--no_plot_after_run", action="store_true", help="Do not show IGD/HV+scatter figure after each run (no blocking; for batch/grid).")
     args = p.parse_args()
 
     # Highest priority: YAML config if provided
@@ -921,6 +931,7 @@ if __name__ == "__main__":
         metrics_every_gen = cfg["metrics_every_gen"]
         hv_enabled = cfg["hv_enabled"]
         pymoo_timing = cfg["pymoo_timing"]
+        plot_after_run = cfg["plot_after_run"]
 
     elif args.params:
         # All parameters from single --params string (ignore other CLI args for grid)
@@ -940,6 +951,7 @@ if __name__ == "__main__":
         pymoo_timing = parsed.get("pymoo_timing", False)
         metrics_every_gen = parsed.get("metrics_every_gen", True)
         hv_enabled = parsed.get("hv_enabled", True)
+        plot_after_run = parsed.get("plot_after_run", True)
     else:
         problem_list = [x.strip() for x in args.problem.split(",") if x.strip()]
         n_var_list = _parse_int_list(args.n_var)
@@ -960,6 +972,7 @@ if __name__ == "__main__":
             metrics_every_gen = False
         if getattr(args, "no_hv", False):
             hv_enabled = False
+        plot_after_run = not getattr(args, "no_plot_after_run", False)
 
     if pymoo_timing:
         os.environ["PYMOO_TIMING"] = "1"
@@ -984,5 +997,6 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         metrics_every_gen=metrics_every_gen,
         hv_enabled=hv_enabled,
+        plot_after_run=plot_after_run,
     )
     print(df)

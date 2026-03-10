@@ -86,6 +86,7 @@ experiments:
 | `metrics_every_gen` | Compute IGD/HV every generation (needed for line plots). | Compute IGD/HV only on last generation (faster; SUMMARY still has final values). |
 | `hv_enabled` | Compute Hypervolume (HV) in addition to IGD. | Disable HV; only IGD/GD (HV columns = NaN; faster for high n_obj). |
 | `pymoo_timing` | Print per-generation timing (for debugging). | No per-generation timing output. |
+| `plot_after_run` | After each run, show IGD/HV+scatter figure and block until closed. | Do not show figure (for batch/grid; use `plot.py` later). |
 
 See `config/experiments.yaml` for inline comments on each parameter.
 
