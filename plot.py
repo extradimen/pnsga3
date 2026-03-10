@@ -5,8 +5,8 @@ Plot NSGA3 vs ParallelNSGA3 line charts (by problem) and scatter plots (Parallel
 If you still get ValueError (ambiguous truth value) after editing this file, try Kernel -> Restart Kernel and re-run all cells;
 or before importing run: import importlib; import plot; importlib.reload(plot)
 
-Path conventions (aligned with structure under output_dir, e.g. nsga_logs/):
-  output_dir / <problem_name> /  e.g. nsga_logs/c1dtlz1/
+Path conventions (aligned with structure under output_dir, e.g. exp_logs/):
+  output_dir / <problem_name> /  e.g. exp_logs/c1dtlz1/
     NSGA3 /
       <problem>_NSGA3_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_seed<seed>_np<n_partitions>_final.npz
     SUMMARY /
@@ -26,7 +26,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 import yaml
 
-DEFAULT_OUTPUT_DIR = "nsga_logs"
+DEFAULT_OUTPUT_DIR = "exp_logs"
 
 
 def _get_history(d: Dict[str, Any], *keys: str) -> Any:
@@ -39,14 +39,14 @@ def _get_history(d: Dict[str, Any], *keys: str) -> Any:
 
 
 def _resolve_base(output_dir: str, problem_name: str) -> Optional[Path]:
-    """Resolve data root: must have NSGA3 or ParallelNSGA3 subdir to count as found; tries output_dir, DEFAULT, ~/nsga_logs in order."""
+    """Resolve data root: must have NSGA3 or ParallelNSGA3 subdir to count as found; tries output_dir, DEFAULT, ~/exp_logs in order."""
     def has_data(p: Path) -> bool:
         return p.exists() and ((p / "NSGA3").exists() or (p / "ParallelNSGA3").exists())
 
     candidates = [
         Path(output_dir).resolve() / problem_name,
         Path(DEFAULT_OUTPUT_DIR) / problem_name,
-        Path.home() / "nsga_logs" / problem_name,
+        Path.home() / "exp_logs" / problem_name,
     ]
     for base in candidates:
         if has_data(base):

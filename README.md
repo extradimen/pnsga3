@@ -1,6 +1,6 @@
 # PNSGA3 — Parallel NSGA-III experiments
 
-Experiments comparing **NSGA-III** and **Parallel NSGA3** (multi-island, reference-direction based). Uses a vendored [pymoo](https://pymoo.org/) with custom `NSGA3` and `ParallelNSGA3` in `pymoo/algorithms/moo/nsga3.py`. Results are written under `nsga_logs/` (or a path you pass) for resume and plotting.
+Experiments comparing **NSGA-III** and **Parallel NSGA3** (multi-island, reference-direction based). Uses a vendored [pymoo](https://pymoo.org/) with custom `NSGA3` and `ParallelNSGA3` in `pymoo/algorithms/moo/nsga3.py`. Results are written under `exp_logs/` (or a path you pass) for resume and plotting.
 
 ## Features
 
@@ -55,7 +55,7 @@ experiments:
 
     # Flags
     pnsga3_only: true
-    output_dir: nsga_logs
+    output_dir: exp_logs
     metrics_every_gen: false   # false = IGD/HV only on last generation
     hv_enabled: false          # false = disable HV entirely (IGD only)
     pymoo_timing: true         # true  = print detailed per-generation timing
@@ -76,23 +76,23 @@ Legacy usage (still supported) – pass all parameters explicitly:
 python nsga3_experiment.py
 
 # Single --params string (lists comma-separated; spaces after commas allowed)
-python nsga3_experiment.py --params "problem=c1dtlz1 n_var=12 n_obj=6,7,8 pop_size=100,200 n_gen=50 n_partitions=6 n_islands=6,8 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=0 output_dir=nsga_logs"
+python nsga3_experiment.py --params "problem=c1dtlz1 n_var=12 n_obj=6,7,8 pop_size=100,200 n_gen=50 n_partitions=6 n_islands=6,8 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=0 output_dir=exp_logs"
 
 # Or individual args
-python nsga3_experiment.py --problem c1dtlz1 --n_obj 6,7,8 --pop_size 100,200 --output_dir nsga_logs
+python nsga3_experiment.py --problem c1dtlz1 --n_obj 6,7,8 --pop_size 100,200 --output_dir exp_logs
 
 # Advanced: timing + IGD/HV control (when not using YAML flags)
 # - --pymoo_timing          print [timing]/[advance]/[survival] each generation (for performance debugging)
 # - --no_metrics_every_gen  compute IGD/HV only on the last generation (SUMMARY still records final IGD/HV)
 # - --no_hv                 disable all HV computations (IGD only, HV columns become NaN)
 python nsga3_experiment.py \
-  --params "problem=c1dtlz1 n_var=12 n_obj=13,16,19 pop_size=120 n_gen=50 n_partitions=3 n_islands=4 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=1 output_dir=nsga_logs" \
+  --params "problem=c1dtlz1 n_var=12 n_obj=13,16,19 pop_size=120 n_gen=50 n_partitions=3 n_islands=4 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=1 output_dir=exp_logs" \
   --pymoo_timing \
   --no_metrics_every_gen \
   --no_hv
 ```
 
-Output layout under `output_dir` (default `nsga_logs/`):
+Output layout under `output_dir` (default `exp_logs/`):
 
 - `output_dir/<problem>/NSGA3/*_final.npz` — NSGA-III cache
 - `output_dir/<problem>/ParallelNSGA3/*.npy` — PNSGA3 history (for line plots); `*_iter*.npz` — per-generation fronts (for scatter)
@@ -115,15 +115,28 @@ This will:
 - Plot ParallelNSGA3 scatter plots (objective space fronts every few generations) into:
   - `output_dir/<problem>/SCATTER/*.png` (separate from the npz/npy caches).
 
-### 3. Load summary DataFrame
+### 3. Export summary to CSV
 
-```python
-from load_summary import load_df_from_disk
+After running experiments, you can merge all `SUMMARY/*.npy` files into a single CSV table:
 
-df = load_df_from_disk(root_dir="nsga_logs", verbose=True)
+```bash
+python load_summary.py \
+  --root_dir exp_logs \
+  --verbose
 ```
 
-Scans only `SUMMARY/*.npy` under `root_dir` and returns a DataFrame with the same columns as the experiment script.
+By default, the CSV is saved to `exp_summary/summary.csv` (exp_summary is parallel to `root_dir`). Example layout:
+
+```
+project/
+  exp_logs/           # --root_dir
+    c1dtlz1/
+      SUMMARY/*.npy
+  exp_summary/       # parallel to exp_logs
+    summary.csv      # output
+```
+
+Use `--csv_path` to override the output path. This scans only `SUMMARY/*.npy` under `root_dir`, normalizes them to a common schema, and writes a CSV with the same columns as the experiment summary DataFrame.
 
 ## Project layout
 

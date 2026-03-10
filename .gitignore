@@ -149,4 +149,5 @@ ENV/
 .mypy_cache/
 
 # Experiment output (default directory for logs and caches)
-nsga_logs/
+exp_logs/
+exp_summary/

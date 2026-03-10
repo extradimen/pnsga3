@@ -50,14 +50,14 @@ def _is_summary_like(data):
     )
 
 
-def load_df_from_disk(root_dir="nsga_logs", verbose=False):
+def load_df_from_disk(root_dir="exp_logs", verbose=False):
     """
     Scan only SUMMARY/*.npy under root_dir and build a DataFrame with the same columns as the experiment df.
 
     Parameters
     ----------
     root_dir : str or Path
-        Root directory; default "nsga_logs".
+        Root directory; default "exp_logs".
     verbose : bool
         Whether to print scanned paths and file count; default False.
 
@@ -66,17 +66,17 @@ def load_df_from_disk(root_dir="nsga_logs", verbose=False):
     df : pandas.DataFrame
         Same columns as the experiment script df; extra column "source", all 'SUMMARY'.
     """
-    # When root_dir is "nsga_logs": if run from .py use nsga_logs next to script; if run in Jupyter use cwd
-    if root_dir == "nsga_logs":
+    # When root_dir is "exp_logs": if run from .py use exp_logs next to script; if run in Jupyter use cwd
+    if root_dir == "exp_logs":
         try:
             _script_dir = Path(__file__).resolve().parent
-            _parallel = _script_dir / "nsga_logs"
+            _parallel = _script_dir / "exp_logs"
             root = _parallel if _parallel.exists() else Path(root_dir).resolve()
         except NameError:
             # When executing this block directly in Jupyter there is no __file__; use cwd (usually notebook dir)
-            root = Path("nsga_logs").resolve()
+            root = Path("exp_logs").resolve()
         if not root.exists() and verbose:
-            print(f">>> Root directory does not exist: {root} (if in Jupyter, ensure nsga_logs exists under cwd)")
+            print(f">>> Root directory does not exist: {root} (if in Jupyter, ensure exp_logs exists under cwd)")
     else:
         root = Path(root_dir).resolve()
     if not root.exists():
@@ -127,6 +127,53 @@ def load_df_from_disk(root_dir="nsga_logs", verbose=False):
     return df
 
 
-# Usage:
-# df = load_df_from_disk(root_dir, verbose)
+def save_summary_csv(root_dir="exp_logs", csv_path=None, verbose=False):
+    """
+    Load SUMMARY/*.npy under root_dir and save the normalized summary table as a CSV file.
+
+    Parameters
+    ----------
+    root_dir : str or Path
+        Root directory; default "exp_logs".
+    csv_path : str or Path or None
+        Destination CSV path. If None, defaults to exp_summary/summary.csv (exp_summary
+        is parallel to root_dir, e.g. exp_logs and exp_summary under the same parent).
+    verbose : bool
+        Whether to print basic information (row count, save path).
+    """
+    df = load_df_from_disk(root_dir=root_dir, verbose=verbose)
+    if csv_path is None:
+        csv_path = Path(root_dir).resolve().parent / "exp_summary" / "summary.csv"
+    else:
+        csv_path = Path(csv_path)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(csv_path, index=False)
+    if verbose:
+        print(f">>> Saved summary CSV with {len(df)} rows to {csv_path}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Load SUMMARY/*.npy under a root directory and save the merged summary as a CSV file."
+    )
+    parser.add_argument(
+        "--root_dir",
+        default="exp_logs",
+        help='Root directory containing <problem>/SUMMARY/*.npy (default: "exp_logs").',
+    )
+    parser.add_argument(
+        "--csv_path",
+        default=None,
+        help='Output CSV path. If omitted, saves to exp_summary/summary.csv (exp_summary parallel to root_dir).',
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print scanned files and summary info.",
+    )
+    args = parser.parse_args()
+
+    save_summary_csv(root_dir=args.root_dir, csv_path=args.csv_path, verbose=args.verbose)
 

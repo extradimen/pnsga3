@@ -16,7 +16,7 @@ experiments:
 
     # Algorithm/experiment flags
     pnsga3_only: false
-    output_dir: nsga_logs
+    output_dir: exp_logs
     metrics_every_gen: True    # false = only compute IGD/HV on last generation
     hv_enabled: false          # false = disable HV entirely (IGD only)
     pymoo_timing: true         # true  = print detailed per-generation timing

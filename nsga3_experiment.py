@@ -76,7 +76,7 @@ def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, A
         migration_rate: [0.1]
         seed: [1]
         pnsga3_only: true
-        output_dir: nsga_logs
+        output_dir: exp_logs
         metrics_every_gen: false
         hv_enabled: false
         pymoo_timing: true
@@ -125,7 +125,7 @@ def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, A
     out["seed_list"] = get_list("seed", [1])
 
     out["pnsga3_only"] = bool(exp.get("pnsga3_only", False))
-    out["output_dir"] = exp.get("output_dir", "nsga_logs")
+    out["output_dir"] = exp.get("output_dir", "exp_logs")
     out["metrics_every_gen"] = bool(exp.get("metrics_every_gen", True))
     out["hv_enabled"] = bool(exp.get("hv_enabled", True))
     out["pymoo_timing"] = bool(exp.get("pymoo_timing", False))
@@ -383,7 +383,7 @@ def run_parallel_nsga3_experiment(
     difficulty_index=9,
     seed=1,
     n_partitions=12,
-    output_dir="nsga_logs",
+    output_dir="exp_logs",
     save_interval=10,
     pnsga3_only=False,
     metrics_every_gen=True,
@@ -691,7 +691,7 @@ def run_grid(
     migration_rate_list,
     seed_list,
     pnsga3_only=False,
-    output_dir="nsga_logs",
+    output_dir="exp_logs",
     server_index=None,
     num_servers=None,
     worker_index=None,
@@ -880,7 +880,7 @@ if __name__ == "__main__":
     p.add_argument("--params", default=None, help=
         "All params in one string: key=value pairs space-separated, lists comma-separated. "
         "Example: problem=c1dtlz1 n_var=12 n_obj=6,7,8 pop_size=100,105 n_gen=50 n_partitions=6 "
-        "n_islands=6,7,8 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=0 output_dir=nsga_logs"
+        "n_islands=6,7,8 migration_interval=3 migration_rate=0.1 seed=1 pnsga3_only=0 output_dir=exp_logs"
     )
     p.add_argument("--problem", default="c1dtlz1", help="Problem name(s), comma-separated (e.g. c1dtlz1,c3dtlz4).")
     p.add_argument("--n_var", default="12", help="n_var list, comma-separated (e.g. 12).")
@@ -893,7 +893,7 @@ if __name__ == "__main__":
     p.add_argument("--migration_rate", default="0.1", help="migration_rate list, comma-separated.")
     p.add_argument("--seed", default="1", help="seed list, comma-separated.")
     p.add_argument("--pnsga3_only", action="store_true", help="Skip NSGA3 each run; run only ParallelNSGA3.")
-    p.add_argument("--output_dir", default="nsga_logs", help="Output directory for logs and caches.")
+    p.add_argument("--output_dir", default="exp_logs", help="Output directory for logs and caches.")
     p.add_argument("--server_index", type=int, default=None, help="Server index 0..num_servers-1 for distributed run.")
     p.add_argument("--num_servers", type=int, default=None, help="Total number of servers (with --server_index, --worker_index, --num_workers).")
     p.add_argument("--worker_index", type=int, default=None, help="Worker index 0..num_workers-1 on this server.")
@@ -936,7 +936,7 @@ if __name__ == "__main__":
         migration_rate_list = parsed.get("migration_rate_list", [0.1])
         seed_list = parsed.get("seed_list", [1])
         pnsga3_only = parsed.get("pnsga3_only", False)
-        output_dir = parsed.get("output_dir", "nsga_logs")
+        output_dir = parsed.get("output_dir", "exp_logs")
         pymoo_timing = parsed.get("pymoo_timing", False)
         metrics_every_gen = parsed.get("metrics_every_gen", True)
         hv_enabled = parsed.get("hv_enabled", True)
