@@ -3,6 +3,9 @@ import warnings
 import numpy as np
 from numpy.linalg import LinAlgError
 
+import os
+import time
+
 from pymoo.algorithms.base.genetic import GeneticAlgorithm
 from pymoo.core.survival import Survival
 from pymoo.core.population import Population
@@ -246,10 +249,22 @@ class ParallelNSGA3(NSGA3):
         return Population.merge(*off_all)
 
     def _advance(self, infills=None, **kwargs):
+        _timing = os.environ.get("PYMOO_TIMING", "").strip() == "1"
+
+        t_merge_init = 0.0
+        t_survival_loop = 0.0
+        t_merge_final = 0.0
+        t_migrate = 0.0
+        t_set_opt = 0.0
+
+        t0 = time.perf_counter() if _timing else 0
         pop = self.pop
         if infills is not None:
             pop = Population.merge(self.pop, infills)
+        if _timing:
+            t_merge_init = time.perf_counter() - t0
 
+        t1 = time.perf_counter() if _timing else 0
         new_islands = []
         for island in range(self.n_islands):
             mask = pop.get("island") == island
@@ -262,23 +277,40 @@ class ParallelNSGA3(NSGA3):
                                     algorithm=self, random_state=self.random_state, **kwargs)
             surv.set("island", np.full(len(surv), island, dtype=int))
             new_islands.append(surv)
+        if _timing:
+            t_survival_loop = time.perf_counter() - t1
 
         if not new_islands:
             self.termination.force_termination = True
             return False
 
-        # if only a single island exists just use it directly
+        t2 = time.perf_counter() if _timing else 0
         if len(new_islands) == 1:
             self.pop = new_islands[0]
         else:
             self.pop = Population.merge(*new_islands)
+        if _timing:
+            t_merge_final = time.perf_counter() - t2
 
-        # periodic migration step
+        t3 = time.perf_counter() if _timing else 0
         if self.migration_interval is not None and self.migration_interval > 0:
             if self.n_iter is not None and self.n_iter % self.migration_interval == 0:
                 self._migrate()
+        if _timing:
+            t_migrate = time.perf_counter() - t3
 
+        t4 = time.perf_counter() if _timing else 0
         self._set_optimum()
+        if _timing:
+            t_set_opt = time.perf_counter() - t4
+            self.data["advance_timing"] = dict(
+                merge_init=t_merge_init,
+                survival_loop=t_survival_loop,
+                merge_final=t_merge_final,
+                migrate=t_migrate,
+                set_optimum=t_set_opt,
+            )
+
         return True
 
     def _migrate(self):
@@ -342,16 +374,24 @@ class ReferenceDirectionSurvival(Survival):
 
     def _do(self, problem, pop, n_survive, D=None, random_state=None, **kwargs):
 
+        # optional: survival step timing when PYMOO_TIMING=1
+        _timing = os.environ.get("PYMOO_TIMING", "").strip() == "1"
+        _algo = kwargs.get("algorithm")
+
         # attributes to be set after the survival
         F = pop.get("F")
 
         # calculate the fronts of the population
+        t0 = time.perf_counter() if _timing else 0
         fronts, rank = NonDominatedSorting().do(F, return_rank=True, n_stop_if_ranked=n_survive)
+        t_nds = (time.perf_counter() - t0) if _timing else 0
         non_dominated, last_front = fronts[0], fronts[-1]
 
         # update the hyperplane based boundary estimation
         hyp_norm = self.norm
+        t1 = time.perf_counter() if _timing else 0
         hyp_norm.update(F, nds=non_dominated)
+        t_norm = (time.perf_counter() - t1) if _timing else 0
         ideal, nadir = hyp_norm.ideal_point, hyp_norm.nadir_point
 
         #  consider only the population until we come to the splitting front
@@ -367,8 +407,10 @@ class ReferenceDirectionSurvival(Survival):
         last_front = fronts[-1]
 
         # associate individuals to niches
+        t2 = time.perf_counter() if _timing else 0
         niche_of_individuals, dist_to_niche, dist_matrix = \
             associate_to_niches(F, self.ref_dirs, ideal, nadir)
+        t_assoc = (time.perf_counter() - t2) if _timing else 0
 
         # attributes of a population
         pop.set('rank', rank,
@@ -396,11 +438,25 @@ class ReferenceDirectionSurvival(Survival):
                 niche_count = calc_niche_count(len(self.ref_dirs), niche_of_individuals[until_last_front])
                 n_remaining = n_survive - len(until_last_front)
 
+            t3 = time.perf_counter() if _timing else 0
             S = niching(pop[last_front], n_remaining, niche_count, niche_of_individuals[last_front],
                         dist_to_niche[last_front], random_state=random_state)
+            t_niching = (time.perf_counter() - t3) if _timing else 0
 
             survivors = np.concatenate((until_last_front, last_front[S].tolist()))
             pop = pop[survivors]
+        else:
+            t_niching = 0.0 if _timing else 0
+
+        if _timing and _algo is not None:
+            st = _algo.data.get("survival_timing_last")
+            if st is not None:
+                st["nds"] += t_nds
+                st["norm"] += t_norm
+                st["associate"] += t_assoc
+                st["niching"] += t_niching
+            else:
+                _algo.data["survival_timing_last"] = dict(nds=t_nds, norm=t_norm, associate=t_assoc, niching=t_niching)
 
         return pop
 

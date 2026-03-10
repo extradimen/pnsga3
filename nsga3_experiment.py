@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import itertools
+import os
 import pandas as pd
 import time
 
@@ -21,6 +22,9 @@ from pymoo.indicators.hv import HV
 from pymoo.indicators.igd import IGD
 from pymoo.core.callback import Callback
 from pymoo.problems.multi.dascmop import DIFFICULTIES   # Used for DASCMOP
+from pymoo.util.display.multi import MultiObjectiveOutput
+from pymoo.util.display.output import pareto_front_if_possible
+from pymoo.indicators.gd import GD as GDIndicator
 
 
 # -------------------------------
@@ -132,6 +136,7 @@ class MetricsCallback(Callback):
         migration_rate,
         seed,
         n_partitions=None,
+        metrics_every_gen=True,
     ):
         super().__init__()
         self.label = label
@@ -139,6 +144,7 @@ class MetricsCallback(Callback):
         self.save_interval = save_interval
         self.igd_indicator = igd_indicator
         self.hv_indicator = hv_indicator
+        self.metrics_every_gen = metrics_every_gen
         self.igd_history = []
         self.hv_history = []
 
@@ -166,22 +172,31 @@ class MetricsCallback(Callback):
 
         F = algorithm.pop.get("F")
 
-        if self.igd_indicator is not None:
-            igd = self.igd_indicator(F)
+        is_last_gen = algorithm.n_iter >= self.n_gen_total
+        do_metrics = self.metrics_every_gen or is_last_gen
+
+        if do_metrics:
+            if self.igd_indicator is not None:
+                igd = self.igd_indicator(F)
+            else:
+                igd = np.nan
+
+            if self.hv_indicator is not None:
+                hv = self.hv_indicator(F)
+            else:
+                hv = np.nan
         else:
             igd = np.nan
-
-        if self.hv_indicator is not None:
-            hv = self.hv_indicator(F)
-        else:
             hv = np.nan
 
         self.igd_history.append(igd)
         self.hv_history.append(hv)
 
         if algorithm.n_iter % self.log_interval == 0:
-            # Print once per gen to see which gen is running (if gen 0 done never appears, first gen is still running)
-            print(f"    gen {algorithm.n_iter}/{self.n_gen_total} done (IGD={igd:.4f})", flush=True)
+            if do_metrics:
+                print(f"    gen {algorithm.n_iter}/{self.n_gen_total} done (IGD={igd:.4f})", flush=True)
+            else:
+                print(f"    gen {algorithm.n_iter}/{self.n_gen_total} done (IGD/HV=last gen only)", flush=True)
             print(f"{self.label} - completed iteration {algorithm.n_iter}", end="\r")
 
         if algorithm.n_iter % self.save_interval == 0:
@@ -218,6 +233,55 @@ class MetricsCallback(Callback):
             )
 
 
+class MultiObjectiveOutputLastGenOnly(MultiObjectiveOutput):
+    """Like MultiObjectiveOutput but when metrics_every_gen=False only computes IGD/GD/HV on last generation (saves time).
+    If hv_enabled=False, HV is never computed (only IGD/GD)."""
+
+    def __init__(self, metrics_every_gen=True, hv_enabled=True):
+        super().__init__()
+        self._metrics_every_gen = metrics_every_gen
+        self._hv_enabled = hv_enabled
+
+    def update(self, algorithm):
+        from pymoo.util.display.output import Output
+        Output.update(self, algorithm)
+        for col in [self.igd, self.gd, self.hv, self.eps, self.indicator]:
+            col.set(None)
+
+        n_max = getattr(algorithm.termination, "n_max_gen", None)
+        is_last_gen = n_max is not None and algorithm.n_iter >= n_max
+        if not self._metrics_every_gen and not is_last_gen:
+            return
+
+        F, feas = algorithm.opt.get("F", "feas")
+        F = F[feas]
+        if len(F) == 0:
+            return
+
+        problem = algorithm.problem
+        if hasattr(problem, "time"):
+            self.pf = pareto_front_if_possible(problem)
+        if self.pf is not None and feas.sum() > 0:
+            self.igd.set(IGD(self.pf, zero_to_one=True).do(F))
+            self.gd.set(GDIndicator(self.pf, zero_to_one=True).do(F))
+            if self._hv_enabled and self.hv in self.columns:
+                from pymoo.indicators.hv import Hypervolume
+                self.hv.set(Hypervolume(pf=self.pf, zero_to_one=True).do(F))
+        if self.indicator_no_pf is not None:
+            ind = self.indicator_no_pf
+            ind.update(algorithm)
+            valid = ind.delta_ideal is not None
+            if valid:
+                if ind.delta_ideal > ind.tol:
+                    max_from, eps = "ideal", ind.delta_ideal
+                elif ind.delta_nadir > ind.tol:
+                    max_from, eps = "nadir", ind.delta_nadir
+                else:
+                    max_from, eps = "f", ind.delta_f
+                self.eps.set(eps)
+                self.indicator.set(max_from)
+
+
 # -------------------------------
 # 3. Experiment runner
 # -------------------------------
@@ -236,20 +300,22 @@ def run_parallel_nsga3_experiment(
     output_dir="nsga_logs",
     save_interval=10,
     pnsga3_only=False,
+    metrics_every_gen=True,
+    hv_enabled=True,
 ):
-    """Compare NSGA-III and ParallelNSGA3 under given parameters and plot IGD/HV curves + front scatter. If pnsga3_only=True, run only PNSGA3 and skip NSGA3."""
+    """Compare NSGA-III and ParallelNSGA3 under given parameters and plot IGD/HV curves + front scatter. If pnsga3_only=True, run only PNSGA3 and skip NSGA3. metrics_every_gen: if True compute IGD/HV every generation; if False only on last generation (faster, SUMMARY still has final IGD/HV)."""
 
-    #print("  [1/5] Building problem...", flush=True)
+    print("  [setup] building problem...", flush=True)
     problem = build_problem(problem_name, n_var, n_obj, difficulty_index)
 
-    #print("  [2/5] Getting reference directions...", flush=True)
+    print("  [setup] getting reference directions...", flush=True)
     ref_dirs = get_reference_directions(
         "das-dennis",
         problem.n_obj,
         n_partitions=n_partitions,
     )
 
-    #print("  [3/5] Setting up IGD/HV indicators...", flush=True)
+    print("  [setup] setting up IGD/HV (pareto_front)...", flush=True)
     try:
         pf = problem.pareto_front(ref_dirs)
     except Exception as e:
@@ -264,23 +330,33 @@ def run_parallel_nsga3_experiment(
         igd_indicator = IGD(pf, zero_to_one=True)
         nadir = np.asarray(np.max(pf, axis=0)).flatten()
         ideal = np.asarray(np.min(pf, axis=0)).flatten()
-        ref_point = nadir + 0.5 * np.maximum(nadir - ideal, 1e-6)
-        hv_indicator = HV(pf=pf, ref_point=ref_point)
+        if hv_enabled:
+            ref_point = nadir + 0.5 * np.maximum(nadir - ideal, 1e-6)
+            hv_indicator = HV(pf=pf, ref_point=ref_point)
+        else:
+            hv_indicator = None
     else:
         igd_indicator = None
         hv_indicator = None
 
     # Complexity: separate for NSGA3 and Parallel NSGA3 (single pop vs per-island pop)
     M = problem.n_obj
-    # NSGA3: single population, N = pop_size
+    # Selection/survival (objective space): O(M N^2), no n_var
     complexity_formula_nsga3 = "O(M N^2), N=pop_size (single population)"
     complexity_M_N2_nsga3 = M * (pop_size ** 2)
     # Parallel NSGA3: per-island pop ~ pop_size/n_islands; total complexity = per-island O(M N^2) * n_islands
     pop_per_island = max(1, pop_size // n_islands)
     complexity_formula_pnsga3 = "O(M N^2) per island × n_islands, N=pop_size/n_islands"
     complexity_M_N2_pnsga3 = n_islands * M * (pop_per_island ** 2)
-    print(f"  [Complexity NSGA3] {complexity_formula_nsga3} => M*N^2 = {M}*{pop_size}^2 = {complexity_M_N2_nsga3}", flush=True)
-    print(f"  [Complexity PNSGA3] {complexity_formula_pnsga3} => {n_islands}*{M}*{pop_per_island}^2 = {complexity_M_N2_pnsga3}", flush=True)
+    # Variation (crossover/mutation in decision space): O(N * n_var) per gen; same total for NSGA3 and PNSGA3
+    complexity_variation = pop_size * n_var
+    print(f"  [Complexity NSGA3] selection: {complexity_formula_nsga3} => M*N^2 = {M}*{pop_size}^2 = {complexity_M_N2_nsga3}", flush=True)
+    print(f"  [Complexity PNSGA3] selection: {complexity_formula_pnsga3} => {n_islands}*{M}*{pop_per_island}^2 = {complexity_M_N2_pnsga3}", flush=True)
+    print(f"  [Complexity both] variation: O(N*n_var) => N*n_var = {pop_size}*{n_var} = {complexity_variation} (per gen)", flush=True)
+    print("  (Note: selection is objective-space; wall time often dominated by fitness evals and ref_dirs when ref_dirs >> pop_size)", flush=True)
+
+    if not metrics_every_gen:
+        print("  [metrics_every_gen=False] IGD/HV and table igd/gd only computed on last generation (faster).", flush=True)
 
     #print("  [4/5] Running NSGA-III...", flush=True)
     def run_algorithm(algorithm, label, algo_name, n_partitions_val=None):
@@ -302,10 +378,12 @@ def run_parallel_nsga3_experiment(
             migration_rate=getattr(algorithm, "migration_rate", 0.0),
             seed=seed,
             n_partitions=n_partitions_val,
+            metrics_every_gen=metrics_every_gen,
         )
 
         print(f"    (n_obj={problem.n_obj}, pop={pop_size}: first gen may take minutes...)", flush=True)
         # verbose=True shows pymoo progress (e.g. Evaluating / Gen 0) to see if stuck in eval or selection
+        # Optional: set env PYMOO_TIMING=1 for per-step timing (infill / eval / advance; survival: nds / norm / associate / niching)
         res = minimize(
             problem,
             algorithm,
@@ -317,6 +395,7 @@ def run_parallel_nsga3_experiment(
 
         F = res.pop.get("F")
 
+        print("  Computing final IGD/HV for summary...", flush=True)
         if igd_indicator is not None:
             igd_final = igd_indicator(F)
         else:
@@ -326,6 +405,7 @@ def run_parallel_nsga3_experiment(
             hv_final = hv_indicator(F)
         else:
             hv_final = np.nan
+        print("  Final IGD/HV done.", flush=True)
 
         print(f"{label} - finished. Final IGD = {igd_final:.6f}, HV = {hv_final:.6f}")
 
@@ -352,7 +432,11 @@ def run_parallel_nsga3_experiment(
             )
             print("NSGA-III - using cached result (skipped run)")
         else:
-            alg_nsga3 = NSGA3(ref_dirs=ref_dirs, pop_size=pop_size)
+            alg_nsga3 = NSGA3(
+                ref_dirs=ref_dirs,
+                pop_size=pop_size,
+                output=MultiObjectiveOutputLastGenOnly(metrics_every_gen=metrics_every_gen, hv_enabled=hv_enabled),
+            )
             F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3 = run_algorithm(
                 alg_nsga3,
                 label="NSGA-III",
@@ -376,6 +460,7 @@ def run_parallel_nsga3_experiment(
         n_islands=n_islands,
         migration_interval=migration_interval,
         migration_rate=migration_rate,
+        output=MultiObjectiveOutputLastGenOnly(metrics_every_gen=metrics_every_gen, hv_enabled=hv_enabled),
     )
     F_pnsga3, igd_hist_pnsga3, hv_hist_pnsga3, igd_pnsga3, hv_pnsga3, gen_times_pnsga3 = run_algorithm(
         alg_pnsga3,
@@ -487,6 +572,7 @@ def run_parallel_nsga3_experiment(
         "complexity_M_N2_nsga3": complexity_M_N2_nsga3,
         "complexity_formula_pnsga3": complexity_formula_pnsga3,
         "complexity_M_N2_pnsga3": complexity_M_N2_pnsga3,
+        "complexity_variation": complexity_variation,
         "gen_time_avg_nsga3": float(np.mean(gen_times_nsga3)) if gen_times_nsga3 else np.nan,
         "gen_time_avg_pnsga3": float(np.mean(gen_times_pnsga3)) if gen_times_pnsga3 else np.nan,
         "igd_nsga3": igd_nsga3,
@@ -520,8 +606,16 @@ def run_grid(
     seed_list,
     pnsga3_only=False,
     output_dir="nsga_logs",
+    server_index=None,
+    num_servers=None,
+    worker_index=None,
+    num_workers=None,
+    metrics_every_gen=True,
+    hv_enabled=True,
 ):
-    """Run the full parameter grid; all list args are iterables (e.g. lists from CLI)."""
+    """Run the full parameter grid; all list args are iterables (e.g. lists from CLI).
+    If server_index, num_servers, worker_index, num_workers are set, only run tasks assigned to this (server, worker).
+    """
     results = []
     _total_lens = (
         len(problem_list),
@@ -538,7 +632,17 @@ def run_grid(
     total_tasks = 1
     for L in _total_lens:
         total_tasks *= L
-    print(f">>> Parameter grid: {total_tasks} tasks\n", flush=True)
+    tasks_per_server = ((total_tasks + num_servers - 1) // num_servers) if num_servers else total_tasks
+    run_filter = (
+        server_index is not None
+        and num_servers is not None
+        and worker_index is not None
+        and num_workers is not None
+    )
+    if run_filter:
+        print(f">>> Parameter grid: {total_tasks} tasks | server {server_index}/{num_servers} worker {worker_index}/{num_workers} (filtered)\n", flush=True)
+    else:
+        print(f">>> Parameter grid: {total_tasks} tasks\n", flush=True)
 
     for task_index, (
         problem_name,
@@ -566,8 +670,13 @@ def run_grid(
         ),
         start=1,
     ):
+        t = task_index - 1  # 0-based
+        if run_filter:
+            if (t // tasks_per_server) != server_index or (t % num_workers) != worker_index:
+                continue
+        print(f"\n>>> Starting task {task_index}/{total_tasks}...", flush=True)
         print(
-            f"\n=== Task {task_index}/{total_tasks} | {problem_name}, n_var={n_var}, n_obj={n_obj}, "
+            f"=== Task {task_index}/{total_tasks} | {problem_name}, n_var={n_var}, n_obj={n_obj}, "
             f"pop={pop_size}, n_partitions={n_partitions}, islands={n_islands}, "
             f"mig_int={migration_interval}, mig_rate={migration_rate}, seed={seed} ===",
             flush=True,
@@ -602,6 +711,8 @@ def run_grid(
                 seed=seed,
                 output_dir=output_dir,
                 pnsga3_only=pnsga3_only,
+                metrics_every_gen=metrics_every_gen,
+                hv_enabled=hv_enabled,
             )
         results.append(summary)
     return pd.DataFrame(results)
@@ -621,7 +732,7 @@ def _parse_params_string(s: str):
     List values are comma-separated (e.g. n_obj=6,7,8); spaces after commas are allowed (e.g. n_var=10, 12).
     If a token has no "=", it is appended to the previous value (so seed=1 , 2 => seed=[1,2]).
     Keys: problem, n_var, n_obj, pop_size, n_gen, n_partitions, n_islands, migration_interval,
-    migration_rate, seed, pnsga3_only, output_dir.
+    migration_rate, seed, pnsga3_only, output_dir, pymoo_timing, metrics_every_gen, hv_enabled.
     """
     out = {}
     parts = s.split()
@@ -662,6 +773,12 @@ def _parse_params_string(s: str):
             out["seed_list"] = _parse_int_list(v)
         elif k == "pnsga3_only":
             out["pnsga3_only"] = v in ("1", "true", "True", "yes")
+        elif k == "pymoo_timing":
+            out["pymoo_timing"] = v in ("1", "true", "True", "yes")
+        elif k == "metrics_every_gen":
+            out["metrics_every_gen"] = v in ("1", "true", "True", "yes")
+        elif k == "hv_enabled":
+            out["hv_enabled"] = v in ("1", "true", "True", "yes")
         elif k == "output_dir":
             out["output_dir"] = v
     return out
@@ -689,6 +806,13 @@ if __name__ == "__main__":
     p.add_argument("--seed", default="1", help="seed list, comma-separated.")
     p.add_argument("--pnsga3_only", action="store_true", help="Skip NSGA3 each run; run only ParallelNSGA3.")
     p.add_argument("--output_dir", default="nsga_logs", help="Output directory for logs and caches.")
+    p.add_argument("--server_index", type=int, default=None, help="Server index 0..num_servers-1 for distributed run.")
+    p.add_argument("--num_servers", type=int, default=None, help="Total number of servers (with --server_index, --worker_index, --num_workers).")
+    p.add_argument("--worker_index", type=int, default=None, help="Worker index 0..num_workers-1 on this server.")
+    p.add_argument("--num_workers", type=int, default=None, help="Number of parallel workers per server.")
+    p.add_argument("--pymoo_timing", action="store_true", help="Print [timing] and [survival] each gen (env PYMOO_TIMING=1).")
+    p.add_argument("--no_metrics_every_gen", action="store_true", help="Only compute IGD/HV on last generation (faster); SUMMARY still has final IGD/HV.")
+    p.add_argument("--no_hv", action="store_true", help="Disable HV computation entirely (faster); IGD only.")
     args = p.parse_args()
 
     if args.params:
@@ -706,6 +830,9 @@ if __name__ == "__main__":
         seed_list = parsed.get("seed_list", [1])
         pnsga3_only = parsed.get("pnsga3_only", False)
         output_dir = parsed.get("output_dir", "nsga_logs")
+        pymoo_timing = parsed.get("pymoo_timing", False)
+        metrics_every_gen = parsed.get("metrics_every_gen", True)
+        hv_enabled = parsed.get("hv_enabled", True)
     else:
         problem_list = [x.strip() for x in args.problem.split(",") if x.strip()]
         n_var_list = _parse_int_list(args.n_var)
@@ -719,6 +846,19 @@ if __name__ == "__main__":
         seed_list = _parse_int_list(args.seed)
         pnsga3_only = args.pnsga3_only
         output_dir = args.output_dir
+        pymoo_timing = getattr(args, "pymoo_timing", False)
+        metrics_every_gen = not getattr(args, "no_metrics_every_gen", False)
+        hv_enabled = not getattr(args, "no_hv", False)
+
+    if getattr(args, "no_metrics_every_gen", False):
+        metrics_every_gen = False
+
+    if getattr(args, "no_hv", False):
+        hv_enabled = False
+
+    if pymoo_timing:
+        os.environ["PYMOO_TIMING"] = "1"
+        print("PYMOO_TIMING=1 enabled: will print [timing] and [survival] each generation.", flush=True)
 
     df = run_grid(
         problem_list=problem_list,
@@ -733,5 +873,11 @@ if __name__ == "__main__":
         seed_list=seed_list,
         pnsga3_only=pnsga3_only,
         output_dir=output_dir,
+        server_index=args.server_index,
+        num_servers=args.num_servers,
+        worker_index=args.worker_index,
+        num_workers=args.num_workers,
+        metrics_every_gen=metrics_every_gen,
+        hv_enabled=hv_enabled,
     )
     print(df)

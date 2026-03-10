@@ -1,4 +1,5 @@
 import copy
+import os
 import time
 
 import numpy as np
@@ -145,15 +146,46 @@ class Algorithm:
 
     def next(self):
 
+        # optional: detailed step timing when PYMOO_TIMING=1
+        _timing = os.environ.get("PYMOO_TIMING", "").strip() == "1"
+
         # get the infill solutions
+        t0 = time.perf_counter() if _timing else 0
         infills = self.infill()
+        t_infill = (time.perf_counter() - t0) if _timing else 0
 
         # call the advance with them after evaluation
         if infills is not None:
+            if _timing:
+                # reset so survival can accumulate over all islands (ParallelNSGA3 calls survival once per island)
+                self.data["survival_timing_last"] = dict(nds=0.0, norm=0.0, associate=0.0, niching=0.0)
+            t1 = time.perf_counter() if _timing else 0
             self.evaluator.eval(self.problem, infills, algorithm=self)
+            t_eval = (time.perf_counter() - t1) if _timing else 0
+            t2 = time.perf_counter() if _timing else 0
             self.advance(infills=infills)
-
-        # if the algorithm does not follow the infill-advance scheme just call advance
+            t_advance = (time.perf_counter() - t2) if _timing else 0
+            if _timing:
+                print(f"  [timing] infill={t_infill:.3f}s eval={t_eval:.3f}s advance={t_advance:.3f}s", flush=True)
+                # advance = _advance + _post_advance; show both so 143s is not "missing"
+                t_inner = self.data.get("_advance_wall")
+                t_post = self.data.get("_post_advance_wall")
+                if t_inner is not None and t_post is not None:
+                    print(f"  [advance split] _advance={t_inner:.3f}s _post_advance={t_post:.3f}s  (advance total = _advance + _post_advance)", flush=True)
+                at = self.data.get("advance_timing")
+                if at:
+                    print(f"  [_advance] merge_init={at['merge_init']:.3f}s survival_loop={at['survival_loop']:.3f}s merge_final={at['merge_final']:.3f}s migrate={at['migrate']:.3f}s set_optimum={at['set_optimum']:.3f}s", flush=True)
+                st = self.data.get("survival_timing_last")
+                if st:
+                    print(f"  [survival] nds={st['nds']:.3f}s norm={st['norm']:.3f}s associate={st['associate']:.3f}s niching={st['niching']:.3f}s (sum over all islands)", flush=True)
+                # _post_advance breakdown: set_optimum, termination, display, callback
+                p_opt = self.data.get("_post_set_optimum")
+                p_term = self.data.get("_post_termination")
+                p_disp = self.data.get("_post_display")
+                p_cb = self.data.get("_post_callback")
+                if any(x is not None for x in (p_opt, p_term, p_disp, p_cb)):
+                    print(f"  [_post_advance] set_optimum={p_opt or 0:.3f}s termination={p_term or 0:.3f}s display={p_disp or 0:.3f}s callback={p_cb or 0:.3f}s", flush=True)
+                self.data["timing_last"] = dict(infill=t_infill, eval=t_eval, advance=t_advance)
         else:
             self.advance()
 
@@ -217,11 +249,17 @@ class Algorithm:
         else:
 
             # call the implementation of the advance method - if the infill is not None
+            _timing = os.environ.get("PYMOO_TIMING", "").strip() == "1"
+            t_advance_inner = time.perf_counter() if _timing else 0
             val = self._advance(infills=infills, **kwargs)
-
+            if _timing:
+                self.data["_advance_wall"] = time.perf_counter() - t_advance_inner
             # always advance to the next iteration - except if the algorithm returns False
             if val is None or val:
+                t_post = time.perf_counter() if _timing else 0
                 self._post_advance()
+                if _timing:
+                    self.data["_post_advance_wall"] = time.perf_counter() - t_post
 
         # if the algorithm has terminated, then do the finalization steps and return the result
         if self.termination.has_terminated():
@@ -295,14 +333,25 @@ class Algorithm:
 
     def _post_advance(self):
 
+        _timing = os.environ.get("PYMOO_TIMING", "").strip() == "1"
+        t0 = time.perf_counter() if _timing else 0
+
         # update the current optimum of the algorithm
         self._set_optimum()
+        if _timing:
+            self.data["_post_set_optimum"] = time.perf_counter() - t0
 
+        t1 = time.perf_counter() if _timing else 0
         # update the current termination condition of the algorithm
         self.termination.update(self)
+        if _timing:
+            self.data["_post_termination"] = time.perf_counter() - t1
 
+        t2 = time.perf_counter() if _timing else 0
         # display the output if defined by the algorithm
         self.display(self)
+        if _timing:
+            self.data["_post_display"] = time.perf_counter() - t2
 
         if self.save_history:
             _hist, _callback, _display = self.history, self.callback, self.display
@@ -313,8 +362,11 @@ class Algorithm:
             self.history, self.callback, self.display = _hist, _callback, _display
             self.history.append(obj)
 
+        t3 = time.perf_counter() if _timing else 0
         # if a callback function is provided it is called after each iteration
         self.callback(self)
+        if _timing:
+            self.data["_post_callback"] = time.perf_counter() - t3
 
         self.n_iter += 1
 
