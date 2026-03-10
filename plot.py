@@ -229,33 +229,32 @@ def plot_line_by_problem(
     n_obj: int,
     pop_size: int,
     n_gen: int,
-    seed: int,
+    n_partitions: Optional[int],
+    seed_list: List[int],
     output_dir: str = DEFAULT_OUTPUT_DIR,
     *,
     n_islands_list: Optional[List[int]] = None,
     migration_interval_list: Optional[List[int]] = None,
     migration_rate_list: Optional[List[float]] = None,
-    n_partitions_list: Optional[List[int]] = None,
     metrics: Tuple[str, ...] = ("igd", "hv"),
     figsize_per_metric: Tuple[float, float] = (8, 5),
     save_dir: Optional[str] = None,
     title_prefix: str = "",
 ) -> List[Path]:
     """
-    Plot line charts by problem: one figure per problem, different algorithm params = different curves; traditional NSGA3 as baseline.
+    Plot line charts by problem: one figure per (problem, n_var, n_obj, pop_size, n_gen, n_partitions);
+    within each figure, curves = (n_islands, migration_interval, migration_rate, seed) for PNSGA3 + NSGA3 per seed.
 
     Grouping:
-    - Same problem = (problem_name, n_var, n_obj, pop_size, n_gen, seed) -> merged into one figure.
-    - Different algo params = (n_islands, migration_interval, migration_rate, n_partitions) -> different curves (NSGA3 can have multiple baseline lines by n_partitions + one line per ParallelNSGA3 config).
-    - Each figure has IGD and HV subplots; each subplot has the above multiple curves.
-
-    If n_islands_list / migration_interval_list / migration_rate_list / n_partitions_list are provided, only curves for those algo params are drawn.
+    - Chart = (problem_name, n_var, n_obj, pop_size, n_gen, n_partitions) -> one figure.
+    - Curves = (n_islands, migration_interval, migration_rate, seed) for PNSGA3 + NSGA3 baseline (one per seed).
+    - NSGA3: dark gray; PNSGA3: colorful.
 
     Data sources:
-    - NSGA3: from output_dir/<problem>/NSGA3/ (*_final.npz igd_history, hv_history; basename may include _np<n_partitions>);
-    - ParallelNSGA3: from output_dir/<problem>/ParallelNSGA3/*.npy (basename includes var/obj/pop/gen/isl/mi/mr/seed/np).
+    - NSGA3: from output_dir/<problem>/NSGA3/ (*_final.npz);
+    - ParallelNSGA3: from output_dir/<problem>/ParallelNSGA3/*.npy or SUMMARY/*.npy.
 
-    Returns list of saved image paths (one file per problem).
+    Returns list of saved image paths.
     """
     base = _resolve_base(output_dir, problem_name)
     if base is None:
@@ -269,90 +268,64 @@ def plot_line_by_problem(
         save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Collect all algo configs and their histories for this problem
-    curves: List[Dict[str, Any]] = []  # [{"label": str, "igd_history": array, "hv_history": array}, ...]
+    # 1) Collect all algo configs and their histories for this chart
+    curves: List[Dict[str, Any]] = []  # [{"label": str, "igd_history": array, "hv_history": array, "is_nsga3": bool}, ...]
 
-    # NSGA3 reference: if n_partitions_list given, load per np and label "NSGA3 np=X"; else try legacy (no _np) then common np
-    nsga3_tried: set = set()
-    def _try_nsga3(n_partitions: Optional[int], label: str) -> None:
-        key = (n_partitions,)
-        if key in nsga3_tried:
-            return
-        nsga3_tried.add(key)
+    # NSGA3 baseline: one curve per seed
+    for seed in seed_list:
         final_npz = nsga3_dir / nsga3_final_basename(problem_name, n_var, n_obj, pop_size, n_gen, seed, n_partitions=n_partitions)
         if not final_npz.exists():
-            return
+            continue
         try:
             data = np.load(final_npz, allow_pickle=True)
             igd = data.get("igd_history")
             hv = data.get("hv_history")
             if igd is not None or hv is not None:
                 curves.append({
-                    "label": label,
+                    "label": f"NSGA3 seed={seed}",
                     "igd_history": np.asarray(igd) if igd is not None else None,
                     "hv_history": np.asarray(hv) if hv is not None else None,
+                    "is_nsga3": True,
                 })
         except Exception as e:
             print(f"[plot_line_by_problem] Failed to load NSGA3 {final_npz.name}: {e}")
 
-    if n_partitions_list:
-        for np_val in n_partitions_list:
-            _try_nsga3(np_val, f"NSGA3 np={np_val}")
-    else:
-        _try_nsga3(None, "NSGA3 (ref)")
-        for np_val in (6, 12):
-            _try_nsga3(np_val, f"NSGA3 np={np_val}")
-    # If NSGA3 npz not found, can also try ref.npy under NSGA3/ (if present; only when no n_partitions_list)
-    has_ref = any("NSGA3" in c.get("label", "") for c in curves)
-    if not has_ref and not n_partitions_list:
-        ref_npy = nsga3_dir / summary_basename_ref(problem_name, n_var, n_obj, pop_size, n_gen, seed)
-        if ref_npy.exists():
-            try:
-                summary = np.load(ref_npy, allow_pickle=True).item()
-                igd = _get_history(summary, "igd_history", "IGD_history", "igd")
-                hv = _get_history(summary, "hv_history", "HV_history", "hv")
-                curves.append({
-                    "label": "NSGA3 (ref)",
-                    "igd_history": np.asarray(igd) if igd is not None else None,
-                    "hv_history": np.asarray(hv) if hv is not None else None,
-                })
-            except Exception as e:
-                print(f"[plot_line_by_problem] Failed to load NSGA3 ref.npy {ref_npy.name}: {e}")
-
-    # 2) ParallelNSGA3 curves: prefer *.npy from ParallelNSGA3/; if none, read from SUMMARY
+    # 2) ParallelNSGA3 curves: (n_islands, migration_interval, migration_rate, seed) per combo
     algo_set = None
-    use_n_partitions_filter = False
     if n_islands_list is not None and migration_interval_list is not None and migration_rate_list is not None:
-        if n_partitions_list is not None:
-            use_n_partitions_filter = True
-            algo_set = set(
-                (ni, mi, round(mr, 4), np_val)
-                for ni, mi, mr, np_val in itertools.product(
-                    n_islands_list, migration_interval_list, migration_rate_list, n_partitions_list
-                )
+        algo_set = set(
+            (ni, mi, round(mr, 4), s)
+            for ni, mi, mr, s in itertools.product(
+                n_islands_list, migration_interval_list, migration_rate_list, seed_list
             )
-        else:
-            algo_set = set(
-                (ni, mi, round(mr, 4)) for ni, mi, mr in itertools.product(n_islands_list, migration_interval_list, migration_rate_list)
-            )
+        )
+
+    def _match_pnsga3(params: Dict[str, Any]) -> bool:
+        if params.get("n_partitions") != n_partitions:
+            return False
+        return (
+            params["n_var"] == n_var
+            and params["n_obj"] == n_obj
+            and params["pop_size"] == pop_size
+            and params["n_gen"] == n_gen
+        )
+
     n_pnsga3_added = 0
 
     def _load_pnsga3_curves_from_dir(directory: Path, from_summary: bool = False) -> None:
         nonlocal n_pnsga3_added
         if not directory.exists():
             return
-        pattern = "*.npy"
-        for f in directory.glob(pattern):
+        for f in directory.glob("*.npy"):
             params = _parse_pnsga3_npy_basename(f.name) if not from_summary else _parse_summary_basename_pnsga3(f.name)
             if params is None:
                 continue
-            if (params.get("problem_name") or "").lower() != (problem_name or "").lower() or not _match_problem(params, n_var, n_obj, pop_size, n_gen, seed):
+            if (params.get("problem_name") or "").lower() != (problem_name or "").lower() or not _match_pnsga3(params):
+                continue
+            if params["seed"] not in seed_list:
                 continue
             if algo_set is not None:
-                if use_n_partitions_filter:
-                    key_algo = (params["n_islands"], params["migration_interval"], round(params["migration_rate"], 4), params.get("n_partitions"))
-                else:
-                    key_algo = (params["n_islands"], params["migration_interval"], round(params["migration_rate"], 4))
+                key_algo = (params["n_islands"], params["migration_interval"], round(params["migration_rate"], 4), params["seed"])
                 if key_algo not in algo_set:
                     continue
             try:
@@ -367,14 +340,12 @@ def plot_line_by_problem(
             if hv is not None:
                 hv = np.asarray(hv)
             if (igd is not None and len(igd) > 0) or (hv is not None and len(hv) > 0):
-                np_val = params.get("n_partitions")
-                label = f"PNSGA3 ni={params['n_islands']} mi={params['migration_interval']} mr={params['migration_rate']}"
-                if np_val is not None:
-                    label += f" np={np_val}"
+                label = f"PNSGA3 ni={params['n_islands']} mi={params['migration_interval']} mr={params['migration_rate']} s={params['seed']}"
                 curves.append({
                     "label": label,
                     "igd_history": igd,
                     "hv_history": hv,
+                    "is_nsga3": False,
                 })
                 n_pnsga3_added += 1
 
@@ -383,28 +354,40 @@ def plot_line_by_problem(
         summary_dir = base / "SUMMARY"
         _load_pnsga3_curves_from_dir(summary_dir, from_summary=True)
 
-    if n_pnsga3_added == 0 and len(curves) > 0:
-        print(f"[plot_line_by_problem] Note: no ParallelNSGA3 curves added for this problem (n_var={n_var}, n_obj={n_obj}, pop={pop_size}, gen={n_gen}, seed={seed}). If ParallelNSGA3 only has _iter*.npz (no igd/hv history), keep SUMMARY .npy or have the experiment write history to ParallelNSGA3/*.npy.")
-
     if not curves:
-        print(f"[plot_line_by_problem] No valid curve data (dir: {base}; NSGA3 use NSGA3/*_final.npz, ParallelNSGA3 use ParallelNSGA3/*.npy with igd_history/hv_history)")
+        print(f"[plot_line_by_problem] No valid curve data (dir: {base})")
         return []
 
-    # 3) Plot: one figure per problem, one subplot each for IGD and HV; each curve = one algo config (NSGA3 baseline + each PNSGA3)
+    # 3) Plot: NSGA3 dark gray, PNSGA3 colorful
     saved = []
-    title_base = f"{title_prefix}{problem_name} (n_var={n_var}, n_obj={n_obj}, pop={pop_size}, gen={n_gen}, seed={seed})"
+    np_str = f" np={n_partitions}" if n_partitions is not None else ""
+    title_base = f"{title_prefix}{problem_name} (n_var={n_var}, n_obj={n_obj}, pop={pop_size}, gen={n_gen}{np_str})"
     n_metrics = len(metrics)
     fig, axes = plt.subplots(1, n_metrics, figsize=(figsize_per_metric[0] * n_metrics, figsize_per_metric[1]))
     if n_metrics == 1:
         axes = [axes]
+    try:
+        cmap = plt.colormaps.get_cmap("tab10")
+    except AttributeError:
+        cmap = plt.get_cmap("tab10")
     for ax, metric in zip(axes, metrics):
         key = f"{metric}_history"
+        nsga3_idx = 0
+        pnsga3_idx = 0
         for c in curves:
             hist = c.get(key)
             if hist is None or len(hist) == 0:
                 continue
             gens = np.arange(len(hist))
-            ax.plot(gens, hist, label=c["label"], alpha=0.8)
+            if c.get("is_nsga3"):
+                color = np.array([0.35, 0.35, 0.35]) - nsga3_idx * 0.05
+                color = np.clip(color, 0.1, 0.9)
+                ax.plot(gens, hist, label=c["label"], alpha=0.9, color=tuple(color))
+                nsga3_idx += 1
+            else:
+                color = cmap(pnsga3_idx % 10)
+                ax.plot(gens, hist, label=c["label"], alpha=0.8, color=color)
+                pnsga3_idx += 1
         ax.set_xlabel("Generation")
         ax.set_ylabel(metric.upper())
         ax.set_title(f"{metric.upper()} history")
@@ -412,7 +395,8 @@ def plot_line_by_problem(
         ax.grid(True, alpha=0.3)
     fig.suptitle(title_base, y=1.02)
     fig.tight_layout()
-    out = save_dir / f"line_{problem_name}_nv{n_var}_no{n_obj}_p{pop_size}_g{n_gen}_s{seed}.png"
+    np_suffix = f"_np{n_partitions}" if n_partitions is not None else ""
+    out = save_dir / f"line_{problem_name}_nv{n_var}_no{n_obj}_p{pop_size}_g{n_gen}{np_suffix}.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     saved.append(out)
@@ -429,11 +413,11 @@ def plot_line_by_problem_from_lists(
     n_obj_list: List[int],
     pop_size_list: List[int],
     n_gen_list: List[int],
+    n_partitions_list: List[Optional[int]],
     seed_list: List[int],
     n_islands_list: List[int],
     migration_interval_list: List[int],
     migration_rate_list: List[float],
-    n_partitions_list: Optional[List[int]] = None,
     output_dir: str = DEFAULT_OUTPUT_DIR,
     *,
     metrics: Tuple[str, ...] = ("igd", "hv"),
@@ -442,24 +426,17 @@ def plot_line_by_problem_from_lists(
     title_prefix: str = "",
 ) -> List[Path]:
     """
-    Retrieve npy/npz by param lists and plot line charts by problem.
+    Plot line charts: one figure per (n_var, n_obj, pop_size, n_gen, n_partitions);
+    within each figure, curves = (n_islands, migration_interval, migration_rate, seed) for PNSGA3 + NSGA3 per seed.
 
-    Grouping:
-    - Same problem params (n_var, n_obj, pop_size, n_gen, seed) -> one figure.
-    - Different algo params (n_islands, migration_interval, migration_rate, n_partitions) -> different curves; NSGA3 can have multiple baseline lines by n_partitions, each ParallelNSGA3 config as comparison curve.
-    - Each figure has IGD and HV subplots; each subplot has the above multiple curves.
-
-    Parameters:
-    - problem_name: problem name
-    - n_var_list, n_obj_list, pop_size_list, n_gen_list, seed_list: problem param lists (same combo = one figure)
-    - n_islands_list, migration_interval_list, migration_rate_list: algo param lists (each combo = one curve)
-    - n_partitions_list: optional; if set, only draw curves for these n_partitions and match NSGA3 _np basenames.
+    Chart grouping (one figure per combo): problem, n_var, n_obj, pop_size, n_gen, n_partitions.
+    Line grouping (curves within figure): n_islands, migration_interval, migration_rate, seed + NSGA3 per seed.
 
     Returns list of all saved image paths.
     """
     all_saved: List[Path] = []
-    for n_var, n_obj, pop_size, n_gen, seed in itertools.product(
-        n_var_list, n_obj_list, pop_size_list, n_gen_list, seed_list
+    for n_var, n_obj, pop_size, n_gen, n_partitions in itertools.product(
+        n_var_list, n_obj_list, pop_size_list, n_gen_list, n_partitions_list
     ):
         saved = plot_line_by_problem(
             problem_name=problem_name,
@@ -467,12 +444,12 @@ def plot_line_by_problem_from_lists(
             n_obj=n_obj,
             pop_size=pop_size,
             n_gen=n_gen,
-            seed=seed,
+            n_partitions=n_partitions,
+            seed_list=seed_list,
             output_dir=output_dir,
             n_islands_list=n_islands_list,
             migration_interval_list=migration_interval_list,
             migration_rate_list=migration_rate_list,
-            n_partitions_list=n_partitions_list,
             metrics=metrics,
             figsize_per_metric=figsize_per_metric,
             save_dir=save_dir,
@@ -771,42 +748,40 @@ if __name__ == "__main__":
             )
         exp = experiments[0]
 
-    def _first(key: str, default=None):
-        """Get first value for key from experiment, turning list into scalar where necessary."""
+    def _to_list(key: str, default=None):
+        """Get value as list from experiment."""
         if key not in exp:
-            return default
+            return [default] if default is not None else [None]
         v = exp[key]
         if isinstance(v, list):
-            if not v:
-                return default
-            return v[0]
-        return v
+            return v if v else ([default] if default is not None else [None])
+        return [v]
 
     problem_name = exp.get("problem", "c1dtlz1")
-    n_var = _first("n_var", 12)
-    n_obj = _first("n_obj", 6)
-    pop_size = _first("pop_size", 100)
-    n_gen = _first("n_gen", 50)
-    seed = _first("seed", 1)
+    n_var_list = _to_list("n_var", 12)
+    n_obj_list = _to_list("n_obj", 6)
+    pop_size_list = _to_list("pop_size", 100)
+    n_gen_list = _to_list("n_gen", 50)
+    n_partitions_list = _to_list("n_partitions", None)
+    seed_list = _to_list("seed", 1)
+    n_islands_list = _to_list("n_islands", 6)
+    migration_interval_list = _to_list("migration_interval", 3)
+    migration_rate_list = _to_list("migration_rate", 0.1)
     output_dir = exp.get("output_dir", DEFAULT_OUTPUT_DIR)
-    n_islands = _first("n_islands", 6)
-    migration_interval = _first("migration_interval", 3)
-    migration_rate = _first("migration_rate", 0.1)
-    n_partitions = _first("n_partitions", None)
 
-    # Line plots (IGD/HV history)
+    # Line plots (IGD/HV history): chart=(n_var,n_obj,pop_size,n_gen,n_partitions), curves=(n_islands,mi,mr,seed)+NSGA3
     if args.mode in ("line", "both"):
         plot_line_by_problem_from_lists(
             problem_name=problem_name,
-            n_var_list=[n_var],
-            n_obj_list=[n_obj],
-            pop_size_list=[pop_size],
-            n_gen_list=[n_gen],
-            seed_list=[seed],
-            n_islands_list=[n_islands],
-            migration_interval_list=[migration_interval],
-            migration_rate_list=[migration_rate],
-            n_partitions_list=[n_partitions] if n_partitions is not None else [None],
+            n_var_list=n_var_list,
+            n_obj_list=n_obj_list,
+            pop_size_list=pop_size_list,
+            n_gen_list=n_gen_list,
+            n_partitions_list=n_partitions_list,
+            seed_list=seed_list,
+            n_islands_list=n_islands_list,
+            migration_interval_list=migration_interval_list,
+            migration_rate_list=migration_rate_list,
             output_dir=output_dir,
         )
 
@@ -814,15 +789,15 @@ if __name__ == "__main__":
     if args.mode in ("scatter", "both"):
         plot_scatter_from_lists(
             problem_name=problem_name,
-            n_var_list=[n_var],
-            n_obj_list=[n_obj],
-            pop_size_list=[pop_size],
-            n_gen_list=[n_gen],
-            seed_list=[seed],
-            n_islands_list=[n_islands],
-            migration_interval_list=[migration_interval],
-            migration_rate_list=[migration_rate],
-            n_partitions_list=[n_partitions] if n_partitions is not None else [None],
+            n_var_list=n_var_list,
+            n_obj_list=n_obj_list,
+            pop_size_list=pop_size_list,
+            n_gen_list=n_gen_list,
+            seed_list=seed_list,
+            n_islands_list=n_islands_list,
+            migration_interval_list=migration_interval_list,
+            migration_rate_list=migration_rate_list,
+            n_partitions_list=n_partitions_list,
             output_dir=output_dir,
             gen_interval=5,
         )
