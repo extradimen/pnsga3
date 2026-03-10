@@ -101,4 +101,8 @@ Scans only `SUMMARY/*.npy` under `root_dir` and returns a DataFrame with the sam
 
 ## License
 
-See repository license (e.g. MIT or same as pymoo if you keep their license).
+## License
+
+This project is licensed under the Apache License 2.0.  
+Vendored `pymoo` code is also under Apache License 2.0; original copyright
+and license notices are preserved.
