@@ -10,9 +10,9 @@ Path conventions (aligned with structure under output_dir, e.g. exp_logs/):
     NSGA3 /
       <problem>_NSGA3_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_seed<seed>_np<n_partitions>_final.npz
     SUMMARY /
-      <problem>_SUMMARY_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_isl<ni>_mi<mi>_mr<mr>_seed<seed>_np<n_partitions>.npy
+      <problem>_SUMMARY_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_isl<ni>_mi<mi>_mr<mr>_seed<seed>_np<n_partitions>_fa<alpha>.npy
     ParallelNSGA3 /   (flat directory, no subdirs)
-      <problem>_ParallelNSGA3_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_isl<ni>_mi<mi>_mr<mr>_seed<seed>_np<n_partitions>.npy  (for line plots)
+      <problem>_ParallelNSGA3_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_isl<ni>_mi<mi>_mr<mr>_seed<seed>_np<n_partitions>_fa<alpha>.npy  (for line plots)
       <problem>_ParallelNSGA3_var<n_var>_obj<n_obj>_pop<pop_size>_gen<n_gen>_seed<seed>_isl<ni>_mi<mi>_mr<mr>_np<n_partitions>_iter<gen>.npz  (for scatter; np optional)
 """
 
@@ -86,11 +86,12 @@ def summary_basename_pnsga3(
     migration_rate: float,
     seed: int,
     n_partitions: int,
+    focus_alpha: float,
 ) -> str:
-    """ParallelNSGA3 SUMMARY basename (includes n_partitions)."""
+    """ParallelNSGA3 SUMMARY basename (includes n_partitions and focus_alpha)."""
     return (
         f"{problem_name}_SUMMARY_var{n_var}_obj{n_obj}_pop{pop_size}_gen{n_gen}"
-        f"_isl{n_islands}_mi{migration_interval}_mr{_mr_str(migration_rate)}_seed{seed}_np{n_partitions}.npy"
+        f"_isl{n_islands}_mi{migration_interval}_mr{_mr_str(migration_rate)}_seed{seed}_np{n_partitions}_fa{_mr_str(focus_alpha)}.npy"
     )
 
 
@@ -162,9 +163,9 @@ def _parse_summary_basename_ref(basename: str) -> Optional[Dict[str, Any]]:
 
 
 def _parse_summary_basename_pnsga3(basename: str) -> Optional[Dict[str, Any]]:
-    """Parse ParallelNSGA3 SUMMARY basename: _SUMMARY_var..._isl..._seed*.npy, optional _np<n_partitions> at end."""
+    """Parse ParallelNSGA3 SUMMARY basename: _SUMMARY_var..._isl..._seed*_np<n_partitions>_fa<alpha>.npy (fa optional for legacy)."""
     m = re.match(
-        r"^(.+)_SUMMARY_var(\d+)_obj(\d+)_pop(\d+)_gen(\d+)_isl(\d+)_mi(\d+)_mr([\d.]+)_seed(\d+)(?:_np(\d+))?\.npy$",
+        r"^(.+)_SUMMARY_var(\d+)_obj(\d+)_pop(\d+)_gen(\d+)_isl(\d+)_mi(\d+)_mr([\d.]+)_seed(\d+)(?:_np(\d+))?(?:_fa([\d.]+))?\.npy$",
         basename,
     )
     if not m:
@@ -182,13 +183,14 @@ def _parse_summary_basename_pnsga3(basename: str) -> Optional[Dict[str, Any]]:
         "is_ref": False,
     }
     out["n_partitions"] = int(m.group(10)) if m.group(10) else None
+    out["focus_alpha"] = float(m.group(11)) if m.group(11) else 0.0
     return out
 
 
 def _parse_pnsga3_npy_basename(basename: str) -> Optional[Dict[str, Any]]:
     """Parse ParallelNSGA3 directory npy basename: same param format for _ParallelNSGA3_ or _SUMMARY_."""
     m = re.match(
-        r"^(.+)_ParallelNSGA3_var(\d+)_obj(\d+)_pop(\d+)_gen(\d+)_isl(\d+)_mi(\d+)_mr([\d.]+)_seed(\d+)(?:_np(\d+))?\.npy$",
+        r"^(.+)_ParallelNSGA3_var(\d+)_obj(\d+)_pop(\d+)_gen(\d+)_isl(\d+)_mi(\d+)_mr([\d.]+)_seed(\d+)(?:_np(\d+))?(?:_fa([\d.]+))?\.npy$",
         basename,
     )
     if m:
@@ -205,6 +207,7 @@ def _parse_pnsga3_npy_basename(basename: str) -> Optional[Dict[str, Any]]:
             "is_ref": False,
         }
         out["n_partitions"] = int(m.group(10)) if m.group(10) else None
+        out["focus_alpha"] = float(m.group(11)) if m.group(11) else 0.0
         return out
     return _parse_summary_basename_pnsga3(basename)
 

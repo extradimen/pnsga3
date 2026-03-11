@@ -24,6 +24,8 @@ from pymoo.problems import get_problem
 from pymoo.indicators.hv import HV
 from pymoo.indicators.igd import IGD
 from pymoo.core.callback import Callback
+from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+from pymoo.algorithms.moo.nsga3 import associate_to_niches
 from pymoo.problems.multi.dascmop import DIFFICULTIES   # Used for DASCMOP
 from pymoo.util.display.multi import MultiObjectiveOutput
 from pymoo.util.display.output import pareto_front_if_possible
@@ -81,6 +83,7 @@ def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, A
         hv_enabled: false
         pymoo_timing: true
         plot_after_run: false   # false = do not show figure after each run (for grid)
+        focus_alpha: 0.0        # 0.0 = original ParallelNSGA3; >0 adds per-island objective focus in survival
     """
     cfg_path = Path(path)
     if not cfg_path.exists():
@@ -124,6 +127,7 @@ def _load_experiment_from_config(path: str, exp_name: str | None) -> Dict[str, A
     out["migration_interval_list"] = get_list("migration_interval", [3])
     out["migration_rate_list"] = get_list("migration_rate", [0.1])
     out["seed_list"] = get_list("seed", [1])
+    out["focus_alpha_list"] = get_list("focus_alpha", [0.0])
 
     out["pnsga3_only"] = bool(exp.get("pnsga3_only", False))
     out["output_dir"] = exp.get("output_dir", "exp_logs")
@@ -147,7 +151,7 @@ def _nsga3_cache_path(output_dir, problem_name, n_var, n_obj, pop_size, n_gen, s
 
 def _pnsga3_summary_path(output_dir, problem_name,
                          n_var, n_obj, pop_size, n_gen,
-                         n_islands, migration_interval, migration_rate, seed, n_partitions):
+                         n_islands, migration_interval, migration_rate, seed, n_partitions, focus_alpha):
     """Path to the combined ParallelNSGA3 + NSGA3 experiment summary (one per parameter combo), used for grid resume."""
     d = Path(output_dir) / problem_name / "SUMMARY"
     d.mkdir(parents=True, exist_ok=True)
@@ -155,12 +159,12 @@ def _pnsga3_summary_path(output_dir, problem_name,
         f"{problem_name}_SUMMARY"
         f"_var{n_var}_obj{n_obj}_pop{pop_size}_gen{n_gen}"
         f"_isl{n_islands}_mi{migration_interval}_mr{migration_rate:.2f}"
-        f"_seed{seed}_np{n_partitions}.npy"
+        f"_seed{seed}_np{n_partitions}_fa{focus_alpha:.3f}.npy"
     )
 
 
 def _pnsga3_result_path(output_dir, problem_name, n_var, n_obj, pop_size, n_gen,
-                        n_islands, migration_interval, migration_rate, seed, n_partitions):
+                        n_islands, migration_interval, migration_rate, seed, n_partitions, focus_alpha):
     """Path for a single ParallelNSGA3 run result (igd_history, hv_history), under ParallelNSGA3/ for plotting."""
     d = Path(output_dir) / problem_name / "ParallelNSGA3"
     d.mkdir(parents=True, exist_ok=True)
@@ -168,7 +172,7 @@ def _pnsga3_result_path(output_dir, problem_name, n_var, n_obj, pop_size, n_gen,
         f"{problem_name}_ParallelNSGA3"
         f"_var{n_var}_obj{n_obj}_pop{pop_size}_gen{n_gen}"
         f"_isl{n_islands}_mi{migration_interval}_mr{migration_rate:.2f}"
-        f"_seed{seed}_np{n_partitions}.npy"
+        f"_seed{seed}_np{n_partitions}_fa{focus_alpha:.3f}.npy"
     )
 
 
@@ -181,13 +185,62 @@ def _load_nsga3_cache(cache_path, igd_indicator, hv_indicator):
     igd_final = float(data["igd_final"])
     hv_final = float(data["hv_final"])
     gen_times = list(data["gen_times"]) if "gen_times" in data.files else []
-    return F, igd_hist, hv_hist, igd_final, hv_final, gen_times
+    feasible_ratio_history = list(data["feasible_ratio_history"]) if "feasible_ratio_history" in data.files else []
+    front1_ratio_history = list(data["front1_ratio_history"]) if "front1_ratio_history" in data.files else []
+    front_sizes_history = list(data["front_sizes_history"].flat) if "front_sizes_history" in data.files else []
+    ideal_point_history = (
+        [data["ideal_point_history"][i] for i in range(len(data["ideal_point_history"]))]
+        if "ideal_point_history" in data.files and len(data["ideal_point_history"]) > 0
+        else []
+    )
+    distribution_std_history = (
+        [data["distribution_std_history"][i] for i in range(len(data["distribution_std_history"]))]
+        if "distribution_std_history" in data.files and len(data["distribution_std_history"]) > 0
+        else []
+    )
+    n_ref_covered_history = list(data["n_ref_covered_history"]) if "n_ref_covered_history" in data.files else []
+    return (
+        F, igd_hist, hv_hist, igd_final, hv_final, gen_times, feasible_ratio_history,
+        front1_ratio_history, front_sizes_history, ideal_point_history,
+        distribution_std_history, n_ref_covered_history,
+    )
 
 
-def _save_nsga3_cache(cache_path, F, igd_history, hv_history, igd_final, hv_final, gen_times=None):
+def _save_nsga3_cache(
+    cache_path,
+    F,
+    igd_history,
+    hv_history,
+    igd_final,
+    hv_final,
+    gen_times=None,
+    feasible_ratio_history=None,
+    front1_ratio_history=None,
+    front_sizes_history=None,
+    ideal_point_history=None,
+    distribution_std_history=None,
+    n_ref_covered_history=None,
+):
     """Write NSGA-III final F, history and metrics to cache."""
     if gen_times is None:
         gen_times = []
+    if feasible_ratio_history is None:
+        feasible_ratio_history = []
+    if front1_ratio_history is None:
+        front1_ratio_history = []
+    if front_sizes_history is None:
+        front_sizes_history = []
+    if ideal_point_history is None:
+        ideal_point_history = []
+    if distribution_std_history is None:
+        distribution_std_history = []
+    if n_ref_covered_history is None:
+        n_ref_covered_history = []
+    # front_sizes_history: list of lists -> object array for npz
+    front_sizes_arr = np.empty(len(front_sizes_history), dtype=object)
+    front_sizes_arr[:] = front_sizes_history
+    ideal_point_arr = np.array(ideal_point_history) if ideal_point_history else np.empty((0, 0))
+    distribution_std_arr = np.array(distribution_std_history) if distribution_std_history else np.empty((0, 0))
     np.savez(
         cache_path,
         F=F,
@@ -196,6 +249,12 @@ def _save_nsga3_cache(cache_path, F, igd_history, hv_history, igd_final, hv_fina
         igd_final=np.array(igd_final),
         hv_final=np.array(hv_final),
         gen_times=np.array(gen_times),
+        feasible_ratio_history=np.array(feasible_ratio_history),
+        front1_ratio_history=np.array(front1_ratio_history),
+        front_sizes_history=front_sizes_arr,
+        ideal_point_history=ideal_point_arr,
+        distribution_std_history=distribution_std_arr,
+        n_ref_covered_history=np.array(n_ref_covered_history),
     )
 
 
@@ -235,6 +294,12 @@ class MetricsCallback(Callback):
         self.metrics_every_gen = metrics_every_gen
         self.igd_history = []
         self.hv_history = []
+        self.feasible_ratio_history = []  # fraction of pop that is feasible each gen
+        self.front1_ratio_history = []
+        self.front_sizes_history = []     # list of lists: [n1, n2, ...] per gen
+        self.ideal_point_history = []     # list of arrays (min per objective) per gen
+        self.distribution_std_history = [] # list of arrays (std per objective) per gen
+        self.n_ref_covered_history = []   # number of ref dirs with >=1 associated solution
 
         self.algo_name = algo_name
         self.problem_name = problem_name
@@ -258,7 +323,44 @@ class MetricsCallback(Callback):
         self.gen_times.append(now - self._last_time)
         self._last_time = now
 
-        F = algorithm.pop.get("F")
+        pop = algorithm.pop
+        # feasible ratio: fraction of population satisfying constraints
+        if pop is not None and len(pop) > 0 and pop.has("FEAS"):
+            feas = pop.get("FEAS")
+            self.feasible_ratio_history.append(float(np.mean(feas)))
+        else:
+            self.feasible_ratio_history.append(1.0 if pop is not None and len(pop) > 0 else np.nan)
+
+        F = pop.get("F") if pop is not None else None
+
+        # Front 1 ratio, front sizes, ideal point, std per obj, ref covered (current surviving pop)
+        if F is not None and len(F) > 0:
+            fronts, _ = NonDominatedSorting().do(F, return_rank=True)
+            front_sizes = [int(len(f)) for f in fronts]
+            self.front_sizes_history.append(front_sizes)
+            self.front1_ratio_history.append(len(fronts[0]) / len(F))
+            self.ideal_point_history.append(np.min(F, axis=0).astype(float))
+            std_per_obj = np.std(F, axis=0)
+            if np.any(np.isnan(std_per_obj)):
+                std_per_obj = np.zeros(F.shape[1], dtype=float)
+            self.distribution_std_history.append(std_per_obj.astype(float))
+            ref_dirs = getattr(algorithm, "ref_dirs", None)
+            if ref_dirs is not None and len(ref_dirs) > 0:
+                ideal_c = np.min(F, axis=0)
+                nadir_c = np.max(F, axis=0)
+                try:
+                    niche_of, _, _ = associate_to_niches(F, ref_dirs, ideal_c, nadir_c)
+                    self.n_ref_covered_history.append(int(len(np.unique(niche_of))))
+                except Exception:
+                    self.n_ref_covered_history.append(np.nan)
+            else:
+                self.n_ref_covered_history.append(np.nan)
+        else:
+            self.front_sizes_history.append([])
+            self.front1_ratio_history.append(np.nan)
+            self.ideal_point_history.append(np.array([], dtype=float))
+            self.distribution_std_history.append(np.array([], dtype=float))
+            self.n_ref_covered_history.append(np.nan)
 
         is_last_gen = algorithm.n_iter >= self.n_gen_total
         do_metrics = self.metrics_every_gen or is_last_gen
@@ -390,9 +492,18 @@ def run_parallel_nsga3_experiment(
     pnsga3_only=False,
     metrics_every_gen=True,
     hv_enabled=True,
+    focus_alpha=0.0,
     plot_after_run=True,
 ):
-    """Compare NSGA-III and ParallelNSGA3 under given parameters and plot IGD/HV curves + front scatter. If pnsga3_only=True, run only PNSGA3 and skip NSGA3. metrics_every_gen: if True compute IGD/HV every generation; if False only on last generation (faster, SUMMARY still has final IGD/HV). plot_after_run: if True show a figure (IGD/HV + scatter) after each run and block until closed; if False skip the figure (for batch/grid runs)."""
+    """Compare NSGA-III and ParallelNSGA3 under given parameters and plot IGD/HV curves + front scatter.
+
+    - pnsga3_only: if True, run only ParallelNSGA3 and skip NSGA3.
+    - metrics_every_gen: if True compute IGD/HV every generation; if False only on last generation (faster, SUMMARY still has final IGD/HV).
+    - hv_enabled: if False, disable HV computations entirely (IGD only).
+    - focus_alpha: island objective-focus strength for ParallelNSGA3; 0.0 = original algorithm (no per-island weighting);
+      >0 up-weights a fixed subset of objectives on each island *only during survival/selection* (IGD/HV still use original F).
+    - plot_after_run: if True show a figure (IGD/HV + scatter) after each run and block until closed; if False skip the figure (for batch/grid runs).
+    """
 
     print("  [setup] building problem...", flush=True)
     problem = build_problem(problem_name, n_var, n_obj, difficulty_index)
@@ -498,7 +609,20 @@ def run_parallel_nsga3_experiment(
 
         print(f"{label} - finished. Final IGD = {igd_final:.6f}, HV = {hv_final:.6f}")
 
-        return F, cb.igd_history, cb.hv_history, igd_final, hv_final, cb.gen_times
+        return (
+            F,
+            cb.igd_history,
+            cb.hv_history,
+            igd_final,
+            hv_final,
+            cb.gen_times,
+            cb.feasible_ratio_history,
+            cb.front1_ratio_history,
+            cb.front_sizes_history,
+            cb.ideal_point_history,
+            cb.distribution_std_history,
+            cb.n_ref_covered_history,
+        )
 
     n_obj_actual = problem.n_obj
     if pnsga3_only:
@@ -510,15 +634,23 @@ def run_parallel_nsga3_experiment(
         igd_nsga3 = np.nan
         hv_nsga3 = np.nan
         gen_times_nsga3 = []
+        feasible_ratio_history_nsga3 = []
+        front1_ratio_history_nsga3 = []
+        front_sizes_history_nsga3 = []
+        ideal_point_history_nsga3 = []
+        distribution_std_history_nsga3 = []
+        n_ref_covered_history_nsga3 = []
         print("  [Skipping NSGA-III] pnsga3_only=True", flush=True)
     else:
         nsga3_cache_path = _nsga3_cache_path(
             output_dir, problem_name, n_var, n_obj_actual, pop_size, n_gen, seed, n_partitions
         )
         if nsga3_cache_path.exists():
-            F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3 = _load_nsga3_cache(
-                nsga3_cache_path, igd_indicator, hv_indicator
-            )
+            (
+                F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3,
+                feasible_ratio_history_nsga3, front1_ratio_history_nsga3, front_sizes_history_nsga3,
+                ideal_point_history_nsga3, distribution_std_history_nsga3, n_ref_covered_history_nsga3,
+            ) = _load_nsga3_cache(nsga3_cache_path, igd_indicator, hv_indicator)
             print("NSGA-III - using cached result (skipped run)")
         else:
             alg_nsga3 = NSGA3(
@@ -526,7 +658,7 @@ def run_parallel_nsga3_experiment(
                 pop_size=pop_size,
                 output=MultiObjectiveOutputLastGenOnly(metrics_every_gen=metrics_every_gen, hv_enabled=hv_enabled),
             )
-            F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3 = run_algorithm(
+            F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3, feasible_ratio_history_nsga3, front1_ratio_history_nsga3, front_sizes_history_nsga3, ideal_point_history_nsga3, distribution_std_history_nsga3, n_ref_covered_history_nsga3 = run_algorithm(
                 alg_nsga3,
                 label="NSGA-III",
                 algo_name="NSGA3",
@@ -540,6 +672,12 @@ def run_parallel_nsga3_experiment(
                 igd_nsga3,
                 hv_nsga3,
                 gen_times_nsga3,
+                feasible_ratio_history_nsga3,
+                front1_ratio_history_nsga3,
+                front_sizes_history_nsga3,
+                ideal_point_history_nsga3,
+                distribution_std_history_nsga3,
+                n_ref_covered_history_nsga3,
             )
 
     # print("  [5/5] Running ParallelNSGA3...", flush=True)
@@ -549,9 +687,10 @@ def run_parallel_nsga3_experiment(
         n_islands=n_islands,
         migration_interval=migration_interval,
         migration_rate=migration_rate,
+        focus_alpha=focus_alpha,
         output=MultiObjectiveOutputLastGenOnly(metrics_every_gen=metrics_every_gen, hv_enabled=hv_enabled),
     )
-    F_pnsga3, igd_hist_pnsga3, hv_hist_pnsga3, igd_pnsga3, hv_pnsga3, gen_times_pnsga3 = run_algorithm(
+    F_pnsga3, igd_hist_pnsga3, hv_hist_pnsga3, igd_pnsga3, hv_pnsga3, gen_times_pnsga3, feasible_ratio_history_pnsga3, front1_ratio_history_pnsga3, front_sizes_history_pnsga3, ideal_point_history_pnsga3, distribution_std_history_pnsga3, n_ref_covered_history_pnsga3 = run_algorithm(
         alg_pnsga3,
         label="ParallelNSGA3",
         algo_name="ParallelNSGA3",
@@ -561,12 +700,20 @@ def run_parallel_nsga3_experiment(
     # Write ParallelNSGA3 igd_history/hv_history to .npy under ParallelNSGA3/ for nsga_plot_utils line plots
     pnsga3_result_path = _pnsga3_result_path(
         output_dir, problem_name, n_var, problem.n_obj,
-        pop_size, n_gen, n_islands, migration_interval, migration_rate, seed, n_partitions
+        pop_size, n_gen, n_islands, migration_interval, migration_rate, seed, n_partitions, focus_alpha
     )
+    fs_arr_pnsga3 = np.empty(len(front_sizes_history_pnsga3), dtype=object)
+    fs_arr_pnsga3[:] = front_sizes_history_pnsga3
     pnsga3_plot_data = {
         "igd_history": np.array(igd_hist_pnsga3),
         "hv_history": np.array(hv_hist_pnsga3),
         "gen_times": np.array(gen_times_pnsga3),
+        "feasible_ratio_history": np.array(feasible_ratio_history_pnsga3),
+        "front1_ratio_history": np.array(front1_ratio_history_pnsga3),
+        "front_sizes_history": fs_arr_pnsga3,
+        "ideal_point_history": np.array(ideal_point_history_pnsga3) if ideal_point_history_pnsga3 else np.empty((0, 0)),
+        "distribution_std_history": np.array(distribution_std_history_pnsga3) if distribution_std_history_pnsga3 else np.empty((0, 0)),
+        "n_ref_covered_history": np.array(n_ref_covered_history_pnsga3),
         "problem_name": problem_name,
         "n_var": n_var,
         "n_obj": problem.n_obj,
@@ -587,9 +734,9 @@ def run_parallel_nsga3_experiment(
         gens_nsga3 = np.arange(1, len(igd_hist_nsga3) + 1)
         gens_pnsga3 = np.arange(1, len(igd_hist_pnsga3) + 1)
 
-        fig = plt.figure(figsize=(12, 10))
-
-        ax_igd = fig.add_subplot(2, 2, 1)
+        fig = plt.figure(figsize=(12, 14))
+        n_rows = 3
+        ax_igd = fig.add_subplot(n_rows, 2, 1)
         ax_igd.plot(gens_nsga3, igd_hist_nsga3, label=f"NSGA-III (final IGD={igd_nsga3:.3g})")
         ax_igd.plot(gens_pnsga3, igd_hist_pnsga3, label=f"ParallelNSGA3 (final IGD={igd_pnsga3:.3g})")
         ax_igd.set_xlabel("Generation")
@@ -598,7 +745,7 @@ def run_parallel_nsga3_experiment(
         ax_igd.grid(True, alpha=0.3)
         ax_igd.legend()
 
-        ax_hv = fig.add_subplot(2, 2, 2)
+        ax_hv = fig.add_subplot(n_rows, 2, 2)
         ax_hv.plot(gens_nsga3, hv_hist_nsga3, label=f"NSGA-III (final HV={hv_nsga3:.3g})")
         ax_hv.plot(gens_pnsga3, hv_hist_pnsga3, label=f"ParallelNSGA3 (final HV={hv_pnsga3:.3g})")
         ax_hv.set_xlabel("Generation")
@@ -608,7 +755,7 @@ def run_parallel_nsga3_experiment(
         ax_hv.legend()
 
         if problem.n_obj >= 3:
-            ax_scatter_nsga3 = fig.add_subplot(2, 2, 3, projection='3d')
+            ax_scatter_nsga3 = fig.add_subplot(n_rows, 2, 3, projection='3d')
             ax_scatter_nsga3.scatter(F_nsga3[:, 0], F_nsga3[:, 1], F_nsga3[:, 2],
                                      s=8, c='tab:blue')
             ax_scatter_nsga3.set_title(
@@ -618,7 +765,7 @@ def run_parallel_nsga3_experiment(
             ax_scatter_nsga3.set_ylabel("f2")
             ax_scatter_nsga3.set_zlabel("f3")
 
-            ax_scatter_pnsga3 = fig.add_subplot(2, 2, 4, projection='3d')
+            ax_scatter_pnsga3 = fig.add_subplot(n_rows, 2, 4, projection='3d')
             ax_scatter_pnsga3.scatter(F_pnsga3[:, 0], F_pnsga3[:, 1], F_pnsga3[:, 2],
                                       s=8, c='tab:orange')
             ax_scatter_pnsga3.set_title(
@@ -628,7 +775,7 @@ def run_parallel_nsga3_experiment(
             ax_scatter_pnsga3.set_ylabel("f2")
             ax_scatter_pnsga3.set_zlabel("f3")
         else:
-            ax_scatter_nsga3 = fig.add_subplot(2, 2, 3)
+            ax_scatter_nsga3 = fig.add_subplot(n_rows, 2, 3)
             ax_scatter_nsga3.scatter(F_nsga3[:, 0], F_nsga3[:, 1], s=8, c='tab:blue')
             ax_scatter_nsga3.set_title(
                 f"NSGA-III Front\nIGD={igd_nsga3:.4f}, HV={hv_nsga3:.4f}"
@@ -636,13 +783,26 @@ def run_parallel_nsga3_experiment(
             ax_scatter_nsga3.set_xlabel("f1")
             ax_scatter_nsga3.set_ylabel("f2")
 
-            ax_scatter_pnsga3 = fig.add_subplot(2, 2, 4)
+            ax_scatter_pnsga3 = fig.add_subplot(n_rows, 2, 4)
             ax_scatter_pnsga3.scatter(F_pnsga3[:, 0], F_pnsga3[:, 1], s=8, c='tab:orange')
             ax_scatter_pnsga3.set_title(
                 f"ParallelNSGA3 Front\nIGD={igd_pnsga3:.4f}, HV={hv_pnsga3:.4f}"
             )
             ax_scatter_pnsga3.set_xlabel("f1")
             ax_scatter_pnsga3.set_ylabel("f2")
+
+        # Feasible ratio vs generation (span both columns of last row)
+        ax_fr = fig.add_subplot(n_rows, 2, (5, 6))
+        if feasible_ratio_history_nsga3:
+            ax_fr.plot(gens_nsga3, feasible_ratio_history_nsga3, label="NSGA-III", alpha=0.8)
+        if feasible_ratio_history_pnsga3:
+            ax_fr.plot(gens_pnsga3, feasible_ratio_history_pnsga3, label="ParallelNSGA3", alpha=0.8)
+        ax_fr.set_xlabel("Generation")
+        ax_fr.set_ylabel("Feasible ratio")
+        ax_fr.set_title("Feasible ratio vs. Generations")
+        ax_fr.legend()
+        ax_fr.grid(True, alpha=0.3)
+        ax_fr.set_ylim(-0.05, 1.05)
 
         plt.tight_layout()
         plt.show()
@@ -659,6 +819,7 @@ def run_parallel_nsga3_experiment(
         "migration_rate": migration_rate,
         "seed": seed,
         "n_partitions": n_partitions,
+        "focus_alpha": focus_alpha,
         "complexity_formula_nsga3": complexity_formula_nsga3,
         "complexity_M_N2_nsga3": complexity_M_N2_nsga3,
         "complexity_formula_pnsga3": complexity_formula_pnsga3,
@@ -666,6 +827,20 @@ def run_parallel_nsga3_experiment(
         "complexity_variation": complexity_variation,
         "gen_time_avg_nsga3": float(np.mean(gen_times_nsga3)) if gen_times_nsga3 else np.nan,
         "gen_time_avg_pnsga3": float(np.mean(gen_times_pnsga3)) if gen_times_pnsga3 else np.nan,
+        "feasible_ratio_final_nsga3": float(feasible_ratio_history_nsga3[-1]) if feasible_ratio_history_nsga3 else np.nan,
+        "feasible_ratio_final_pnsga3": float(feasible_ratio_history_pnsga3[-1]) if feasible_ratio_history_pnsga3 else np.nan,
+        "feasible_ratio_mean_nsga3": float(np.mean(feasible_ratio_history_nsga3)) if feasible_ratio_history_nsga3 else np.nan,
+        "feasible_ratio_mean_pnsga3": float(np.mean(feasible_ratio_history_pnsga3)) if feasible_ratio_history_pnsga3 else np.nan,
+        "front1_ratio_final_nsga3": float(front1_ratio_history_nsga3[-1]) if front1_ratio_history_nsga3 else np.nan,
+        "front1_ratio_final_pnsga3": float(front1_ratio_history_pnsga3[-1]) if front1_ratio_history_pnsga3 else np.nan,
+        "front_sizes_last_nsga3": str(front_sizes_history_nsga3[-1]) if front_sizes_history_nsga3 else "",
+        "front_sizes_last_pnsga3": str(front_sizes_history_pnsga3[-1]) if front_sizes_history_pnsga3 else "",
+        "ideal_point_final_nsga3": list(ideal_point_history_nsga3[-1]) if ideal_point_history_nsga3 and len(ideal_point_history_nsga3[-1]) > 0 else None,
+        "ideal_point_final_pnsga3": list(ideal_point_history_pnsga3[-1]) if ideal_point_history_pnsga3 and len(ideal_point_history_pnsga3[-1]) > 0 else None,
+        "distribution_std_final_nsga3": list(distribution_std_history_nsga3[-1]) if distribution_std_history_nsga3 and len(distribution_std_history_nsga3[-1]) > 0 else None,
+        "distribution_std_final_pnsga3": list(distribution_std_history_pnsga3[-1]) if distribution_std_history_pnsga3 and len(distribution_std_history_pnsga3[-1]) > 0 else None,
+        "n_ref_covered_final_nsga3": int(n_ref_covered_history_nsga3[-1]) if n_ref_covered_history_nsga3 and np.isfinite(n_ref_covered_history_nsga3[-1]) else None,
+        "n_ref_covered_final_pnsga3": int(n_ref_covered_history_pnsga3[-1]) if n_ref_covered_history_pnsga3 and np.isfinite(n_ref_covered_history_pnsga3[-1]) else None,
         "igd_nsga3": igd_nsga3,
         "hv_nsga3": hv_nsga3,
         "igd_pnsga3": igd_pnsga3,
@@ -674,7 +849,7 @@ def run_parallel_nsga3_experiment(
 
     summary_path = _pnsga3_summary_path(
         output_dir, problem_name, n_var, problem.n_obj,
-        pop_size, n_gen, n_islands, migration_interval, migration_rate, seed, n_partitions
+        pop_size, n_gen, n_islands, migration_interval, migration_rate, seed, n_partitions, focus_alpha
     )
     np.save(summary_path, summary)
 
@@ -704,11 +879,17 @@ def run_grid(
     metrics_every_gen=True,
     hv_enabled=True,
     plot_after_run=True,
+    focus_alpha_list=None,
 ):
     """Run the full parameter grid; all list args are iterables (e.g. lists from CLI).
     If server_index, num_servers, worker_index, num_workers are set, only run tasks assigned to this (server, worker).
-    plot_after_run: if False, do not show the IGD/HV+scatter figure after each run (no blocking)."""
+    plot_after_run: if False, do not show the IGD/HV+scatter figure after each run (no blocking).
+    focus_alpha_list: list of scalar alpha values to grid over; 0.0 = original ParallelNSGA3, >0 adds per-island objective focus in survival.
+    """
     results = []
+    if focus_alpha_list is None:
+        focus_alpha_list = [0.0]
+
     _total_lens = (
         len(problem_list),
         len(n_var_list),
@@ -720,6 +901,7 @@ def run_grid(
         len(migration_interval_list),
         len(migration_rate_list),
         len(seed_list),
+        len(focus_alpha_list),
     )
     total_tasks = 1
     for L in _total_lens:
@@ -747,6 +929,7 @@ def run_grid(
         migration_interval,
         migration_rate,
         seed,
+        focus_alpha,
     ) in enumerate(
         itertools.product(
             problem_list,
@@ -759,6 +942,7 @@ def run_grid(
             migration_interval_list,
             migration_rate_list,
             seed_list,
+            focus_alpha_list,
         ),
         start=1,
     ):
@@ -770,7 +954,7 @@ def run_grid(
         print(
             f"=== Task {task_index}/{total_tasks} | {problem_name}, n_var={n_var}, n_obj={n_obj}, "
             f"pop={pop_size}, n_partitions={n_partitions}, islands={n_islands}, "
-            f"mig_int={migration_interval}, mig_rate={migration_rate}, seed={seed} ===",
+            f"mig_int={migration_interval}, mig_rate={migration_rate}, seed={seed}, fa={focus_alpha} ===",
             flush=True,
         )
         summary_path = _pnsga3_summary_path(
@@ -785,6 +969,7 @@ def run_grid(
             migration_rate,
             seed,
             n_partitions,
+            focus_alpha,
         )
         if summary_path.exists():
             summary = np.load(summary_path, allow_pickle=True).item()
@@ -805,6 +990,7 @@ def run_grid(
                 pnsga3_only=pnsga3_only,
                 metrics_every_gen=metrics_every_gen,
                 hv_enabled=hv_enabled,
+                focus_alpha=focus_alpha,
                 plot_after_run=plot_after_run,
             )
         results.append(summary)
@@ -825,7 +1011,7 @@ def _parse_params_string(s: str):
     List values are comma-separated (e.g. n_obj=6,7,8); spaces after commas are allowed (e.g. n_var=10, 12).
     If a token has no "=", it is appended to the previous value (so seed=1 , 2 => seed=[1,2]).
     Keys: problem, n_var, n_obj, pop_size, n_gen, n_partitions, n_islands, migration_interval,
-    migration_rate, seed, pnsga3_only, output_dir, pymoo_timing, metrics_every_gen, hv_enabled, plot_after_run.
+    migration_rate, seed, pnsga3_only, output_dir, pymoo_timing, metrics_every_gen, hv_enabled, plot_after_run, focus_alpha.
     """
     out = {}
     parts = s.split()
@@ -876,6 +1062,11 @@ def _parse_params_string(s: str):
             out["output_dir"] = v
         elif k == "plot_after_run":
             out["plot_after_run"] = v in ("1", "true", "True", "yes")
+        elif k == "focus_alpha":
+            try:
+                out["focus_alpha"] = float(v)
+            except ValueError:
+                pass
     return out
 
 
@@ -910,6 +1101,8 @@ if __name__ == "__main__":
     p.add_argument("--pymoo_timing", action="store_true", help="Print [timing] and [survival] each gen (env PYMOO_TIMING=1).")
     p.add_argument("--no_metrics_every_gen", action="store_true", help="Only compute IGD/HV on last generation (faster); SUMMARY still has final IGD/HV.")
     p.add_argument("--no_hv", action="store_true", help="Disable HV computation entirely (faster); IGD only.")
+    p.add_argument("--focus_alpha", type=float, default=0.0,
+                   help="Per-island objective focus strength alpha; 0.0 = original ParallelNSGA3, >0 upweights island-specific objectives during survival only.")
     p.add_argument("--no_plot_after_run", action="store_true", help="Do not show IGD/HV+scatter figure after each run (no blocking; for batch/grid).")
     args = p.parse_args()
 
@@ -926,6 +1119,7 @@ if __name__ == "__main__":
         migration_interval_list = cfg["migration_interval_list"]
         migration_rate_list = cfg["migration_rate_list"]
         seed_list = cfg["seed_list"]
+        focus_alpha_list = cfg["focus_alpha_list"]
         pnsga3_only = cfg["pnsga3_only"]
         output_dir = cfg["output_dir"]
         metrics_every_gen = cfg["metrics_every_gen"]
@@ -946,6 +1140,7 @@ if __name__ == "__main__":
         migration_interval_list = parsed.get("migration_interval_list", [3])
         migration_rate_list = parsed.get("migration_rate_list", [0.1])
         seed_list = parsed.get("seed_list", [1])
+        focus_alpha_list = parsed.get("focus_alpha_list", [float(parsed.get("focus_alpha", 0.0))])
         pnsga3_only = parsed.get("pnsga3_only", False)
         output_dir = parsed.get("output_dir", "exp_logs")
         pymoo_timing = parsed.get("pymoo_timing", False)
@@ -963,6 +1158,7 @@ if __name__ == "__main__":
         migration_interval_list = _parse_int_list(args.migration_interval)
         migration_rate_list = _parse_float_list(args.migration_rate)
         seed_list = _parse_int_list(args.seed)
+        focus_alpha_list = _parse_float_list(getattr(args, "focus_alpha", "0.0"))
         pnsga3_only = args.pnsga3_only
         output_dir = args.output_dir
         pymoo_timing = getattr(args, "pymoo_timing", False)
@@ -998,5 +1194,6 @@ if __name__ == "__main__":
         metrics_every_gen=metrics_every_gen,
         hv_enabled=hv_enabled,
         plot_after_run=plot_after_run,
+        focus_alpha_list=focus_alpha_list,
     )
     print(df)

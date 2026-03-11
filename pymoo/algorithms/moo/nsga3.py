@@ -141,6 +141,7 @@ class ParallelNSGA3(NSGA3):
                  eliminate_duplicates=True,
                  n_offsprings=None,
                  output=MultiObjectiveOutput(),
+                 focus_alpha=0.0,
                  **kwargs):
         """
 
@@ -168,6 +169,9 @@ class ParallelNSGA3(NSGA3):
         self.migration_interval = migration_interval if migration_interval is not None else -1
         self.migration_rate = float(migration_rate)
         self.hall_of_fame = Population()
+        # per-island objective focus strength; 0.0 = original ParallelNSGA3 (no reweighting)
+        self.focus_alpha = float(focus_alpha)
+        self._focus_weights_per_island = None
 
         # determine total population size (same semantics as NSGA3)
         if pop_size is None and ref_dirs is not None:
@@ -197,6 +201,29 @@ class ParallelNSGA3(NSGA3):
                          n_offsprings=n_offsprings,
                          output=output,
                          **kwargs)
+
+    def _init_focus_weights(self, n_obj: int):
+        """Initialize per-island objective weights for survival if focus_alpha > 0.
+
+        Strategy: distribute objective indices approximately evenly across islands
+        (round-robin), then upweight those indices for each island by (1 + alpha).
+        """
+        if self.focus_alpha <= 0.0 or self._focus_weights_per_island is not None:
+            return
+        M = int(n_obj)
+        if M <= 0 or self.n_islands <= 0:
+            return
+        alpha = float(self.focus_alpha)
+        # assign objective indices to islands in a round-robin fashion
+        per_island_indices = [[] for _ in range(self.n_islands)]
+        for j in range(M):
+            per_island_indices[j % self.n_islands].append(j)
+        self._focus_weights_per_island = []
+        for island in range(self.n_islands):
+            w = np.ones(M, dtype=float)
+            for j in per_island_indices[island]:
+                w[j] += alpha
+            self._focus_weights_per_island.append(w)
 
     def _initialize_infill(self):
         pop = super()._initialize_infill()
@@ -258,6 +285,10 @@ class ParallelNSGA3(NSGA3):
         t_set_opt = 0.0
 
         t0 = time.perf_counter() if _timing else 0
+
+        # initialize per-island objective focus weights once we know n_obj
+        if hasattr(self, "problem") and getattr(self, "problem", None) is not None:
+            self._init_focus_weights(self.problem.n_obj)
         pop = self.pop
         if infills is not None:
             pop = Population.merge(self.pop, infills)
@@ -273,8 +304,24 @@ class ParallelNSGA3(NSGA3):
                 continue
 
             target_size = self._island_sizes[island]
-            surv = self.survival.do(self.problem, sub, n_survive=target_size,
-                                    algorithm=self, random_state=self.random_state, **kwargs)
+            # Optional: per-island objective reweighting during survival only.
+            F_override = None
+            if self.focus_alpha > 0.0 and self._focus_weights_per_island is not None:
+                F_sub = sub.get("F")
+                if F_sub is not None and len(F_sub) > 0:
+                    w = self._focus_weights_per_island[min(island, len(self._focus_weights_per_island) - 1)]
+                    if F_sub.shape[1] == len(w):
+                        F_override = F_sub * w
+
+            surv = self.survival.do(
+                self.problem,
+                sub,
+                n_survive=target_size,
+                algorithm=self,
+                random_state=self.random_state,
+                F_override=F_override,
+                **kwargs,
+            )
             surv.set("island", np.full(len(surv), island, dtype=int))
             new_islands.append(surv)
         if _timing:
@@ -379,7 +426,12 @@ class ReferenceDirectionSurvival(Survival):
         _algo = kwargs.get("algorithm")
 
         # attributes to be set after the survival
-        F = pop.get("F")
+        # optional: override F with a pre-weighted matrix passed by the caller (e.g. ParallelNSGA3 per-island focus)
+        F_override = kwargs.get("F_override", None)
+        if F_override is not None:
+            F = np.asarray(F_override)
+        else:
+            F = pop.get("F")
 
         # calculate the fronts of the population
         t0 = time.perf_counter() if _timing else 0

@@ -42,6 +42,17 @@ class Survival:
             # split feasible and infeasible solutions
             feas, infeas = split_by_feasibility(pop, sort_infeas_by_cv=True)
 
+            # if an override for F is provided (e.g. per-island reweighting), keep it aligned with the feasible subset
+            if "F_override" in kwargs and kwargs["F_override"] is not None:
+                F_override = kwargs["F_override"]
+                # defensive: only slice if lengths are consistent
+                try:
+                    kwargs = dict(kwargs)
+                    kwargs["F_override"] = F_override[feas]
+                except Exception:
+                    # if anything goes wrong, fall back to original behavior without override
+                    kwargs = {k: v for k, v in kwargs.items() if k != "F_override"}
+
             if len(feas) == 0:
                 survivors = Population()
             else:

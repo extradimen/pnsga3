@@ -1,0 +1,64 @@
+# PNSGA3 experiment configuration
+# Each experiment is a grid over the listed parameters; use lists for multiple values.
+# 目标测试 n_obj 的 pop size 需求
+experiments:
+  - name: c1dtlz1_13_16_19
+    # -------------------------------------------------------------------------
+    # Problem and decision variables
+    # -------------------------------------------------------------------------
+    problem: c1dtlz1          # Problem name (e.g. c1dtlz1, dtlz1)
+    n_var: [12]               # Number of decision variables (list for grid)
+
+    # -------------------------------------------------------------------------
+    # Objectives and algorithm parameters (grid over these lists)
+    # -------------------------------------------------------------------------
+    n_obj: [5,6,7,8,9,10,11,12,13]         # Number of objectives
+    pop_size: [
+    100,200,300,400,500,600,700,800,900,1000,2000,3000,4000,5000,6000,7000,8000,9000,10000
+    ]          # Population size
+    n_gen: [50]              # Number of generations
+    n_partitions: [3]        # Reference direction partitions (N = C(n_obj + n_partitions - 1, n_partitions))
+    n_islands: [5]           # Number of islands in ParallelNSGA3
+    migration_interval: [5] # Generations between migrations
+    migration_rate: [0.1]    # Fraction of population to migrate (0.0–1.0)
+    seed: [1]                # Random seed(s); multiple seeds = multiple runs per config
+
+    # -------------------------------------------------------------------------
+    # Algorithm / experiment flags
+    # -------------------------------------------------------------------------
+    # pnsga3_only:
+    #   true  = Run only ParallelNSGA3; skip NSGA3 baseline (faster for PNSGA3-only experiments)
+    #   false = Run both NSGA3 and ParallelNSGA3 for comparison
+    pnsga3_only: false
+
+    # output_dir: Directory for logs, caches, SUMMARY/*.npy (default: exp_logs)
+    output_dir: exp_logs5
+
+    # metrics_every_gen:
+    #   true  = Compute IGD/HV every generation (needed for line plots over generations)
+    #   false = Compute IGD/HV only on last generation (faster; SUMMARY still has final IGD/HV)
+    metrics_every_gen: true
+
+    # hv_enabled:
+    #   true  = Compute Hypervolume (HV) in addition to IGD
+    #   false = Disable HV entirely; only IGD/GD computed (HV columns become NaN; faster for high n_obj)
+    hv_enabled: false
+
+    # pymoo_timing:
+    #   true  = Print [timing]/[advance]/[survival] each generation (for performance debugging)
+    #   false = No per-generation timing output
+    pymoo_timing: true
+
+    # plot_after_run:
+    #   true  = After each run, show a figure (IGD/HV curves + Pareto front scatter) and block until closed
+    #   false = Do not show figure after each run (for batch/grid; use plot.py later for charts)
+    plot_after_run: false
+
+    # focus_alpha:
+    #   0.0  = Original ParallelNSGA3 (no per-island objective focus; survival uses raw objectives)
+    #   >0   = For each island, upweight a fixed subset of objectives during survival/selection only
+    #         (objectives are distributed approximately evenly across islands; IGD/HV still use raw objectives).
+    focus_alpha: [
+      0.02,0.04,0.06,0.08,0.1,
+      0.12,0.14,0.16,0.18,0.20, 
+    ]

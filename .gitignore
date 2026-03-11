@@ -149,5 +149,5 @@ ENV/
 .mypy_cache/
 
 # Experiment output (default directory for logs and caches)
-exp_logs/
-exp_summary/
+exp_logs*/
+exp_summary*/

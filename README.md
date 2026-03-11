@@ -78,6 +78,7 @@ experiments:
 | `migration_rate` | list[float] | Fraction of population to migrate (0.0–1.0). |
 | `seed` | list[int] | Random seed(s); multiple = multiple runs per config. |
 | `output_dir` | str | Directory for logs and caches (default: `exp_logs`). |
+| `focus_alpha` | float | Per-island objective focus strength; 0.0 = original PNSGA3, >0 upweights a fixed subset of objectives per island during survival only. |
 
 **Boolean flags:**
 
