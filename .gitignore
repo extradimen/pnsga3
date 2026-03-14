@@ -153,4 +153,4 @@ exp_logs*/
 exp_summary*/
 
 # Configuration
-config/experiments*.yaml
+config/experiments_*.yaml

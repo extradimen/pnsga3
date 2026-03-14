@@ -101,6 +101,8 @@ def _load_nsga3_histories(npz_path: Path):
         std = [d["distribution_std_history"][i] for i in range(len(d["distribution_std_history"]))]
 
     return dict(
+        igd_history=_get_list("igd_history", []),
+        igd_plus_history=_get_list("igd_plus_history", []),
         feasible_ratio_history=feasible,
         front1_ratio_history=front1,
         front_sizes_history=front_sizes,
@@ -131,6 +133,8 @@ def _extract_timeseries_rows(summary: dict, root_dir: Path):
                 **ident,
                 "algo": "nsga3",
                 "gen": t + 1,
+                "igd": h["igd_history"][t] if t < len(h["igd_history"]) else np.nan,
+                "igd_plus": h["igd_plus_history"][t] if t < len(h["igd_plus_history"]) else np.nan,
                 "feasible_ratio": h["feasible_ratio_history"][t] if t < len(h["feasible_ratio_history"]) else np.nan,
                 "front1_ratio": h["front1_ratio_history"][t] if t < len(h["front1_ratio_history"]) else np.nan,
                 "front_sizes": _as_json_text(h["front_sizes_history"][t] if t < len(h["front_sizes_history"]) else []),
@@ -147,6 +151,8 @@ def _extract_timeseries_rows(summary: dict, root_dir: Path):
     )
     if pnsga3_path.exists():
         d = _load_pnsga3_plot_data(pnsga3_path)
+        igd = list(np.asarray(d.get("igd_history", []), dtype=float)) if d.get("igd_history") is not None else []
+        igd_plus = list(np.asarray(d.get("igd_plus_history", []), dtype=float)) if d.get("igd_plus_history") is not None else []
         feasible = list(np.asarray(d.get("feasible_ratio_history", []), dtype=float)) if d.get("feasible_ratio_history") is not None else []
         front1 = list(np.asarray(d.get("front1_ratio_history", []), dtype=float)) if d.get("front1_ratio_history") is not None else []
         n_ref = list(np.asarray(d.get("n_ref_covered_history", []), dtype=float)) if d.get("n_ref_covered_history") is not None else []
@@ -161,6 +167,8 @@ def _extract_timeseries_rows(summary: dict, root_dir: Path):
                 **ident,
                 "algo": "pnsga3",
                 "gen": t + 1,
+                "igd": igd[t] if t < len(igd) else np.nan,
+                "igd_plus": igd_plus[t] if t < len(igd_plus) else np.nan,
                 "feasible_ratio": feasible[t] if t < len(feasible) else np.nan,
                 "front1_ratio": front1[t] if t < len(front1) else np.nan,
                 "front_sizes": _as_json_text(front_sizes[t] if t < len(front_sizes) else []),
@@ -227,7 +235,7 @@ def save_timeseries_csv(root_dir="exp_logs", csv_path=None, verbose=False):
 
     df = pd.DataFrame(rows)
     # stable column order
-    cols = ID_KEYS + ["algo", "gen", "feasible_ratio", "front1_ratio", "n_ref_covered",
+    cols = ID_KEYS + ["algo", "gen", "igd", "igd_plus", "feasible_ratio", "front1_ratio", "n_ref_covered",
                       "front_sizes", "ideal_point", "distribution_std"]
     df = df[[c for c in cols if c in df.columns]]
     df.to_csv(csv_path, index=False)

@@ -23,6 +23,7 @@ from pymoo.util.ref_dirs import get_reference_directions
 from pymoo.problems import get_problem
 from pymoo.indicators.hv import HV
 from pymoo.indicators.igd import IGD
+from pymoo.indicators.igd_plus import IGDPlus
 from pymoo.core.callback import Callback
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.algorithms.moo.nsga3 import associate_to_niches
@@ -181,8 +182,10 @@ def _load_nsga3_cache(cache_path, igd_indicator, hv_indicator):
     data = np.load(cache_path, allow_pickle=True)
     F = data["F"]
     igd_hist = list(data["igd_history"])
+    igd_plus_hist = list(data["igd_plus_history"]) if "igd_plus_history" in data.files else []
     hv_hist = list(data["hv_history"])
     igd_final = float(data["igd_final"])
+    igd_plus_final = float(data["igd_plus_final"]) if "igd_plus_final" in data.files else np.nan
     hv_final = float(data["hv_final"])
     gen_times = list(data["gen_times"]) if "gen_times" in data.files else []
     feasible_ratio_history = list(data["feasible_ratio_history"]) if "feasible_ratio_history" in data.files else []
@@ -200,7 +203,8 @@ def _load_nsga3_cache(cache_path, igd_indicator, hv_indicator):
     )
     n_ref_covered_history = list(data["n_ref_covered_history"]) if "n_ref_covered_history" in data.files else []
     return (
-        F, igd_hist, hv_hist, igd_final, hv_final, gen_times, feasible_ratio_history,
+        F, igd_hist, igd_plus_hist, hv_hist, igd_final, igd_plus_final, hv_final,
+        gen_times, feasible_ratio_history,
         front1_ratio_history, front_sizes_history, ideal_point_history,
         distribution_std_history, n_ref_covered_history,
     )
@@ -210,8 +214,10 @@ def _save_nsga3_cache(
     cache_path,
     F,
     igd_history,
+    igd_plus_history,
     hv_history,
     igd_final,
+    igd_plus_final,
     hv_final,
     gen_times=None,
     feasible_ratio_history=None,
@@ -245,8 +251,10 @@ def _save_nsga3_cache(
         cache_path,
         F=F,
         igd_history=np.array(igd_history),
+        igd_plus_history=np.array(igd_plus_history),
         hv_history=np.array(hv_history),
         igd_final=np.array(igd_final),
+        igd_plus_final=np.array(igd_plus_final),
         hv_final=np.array(hv_final),
         gen_times=np.array(gen_times),
         feasible_ratio_history=np.array(feasible_ratio_history),
@@ -262,7 +270,7 @@ def _save_nsga3_cache(
 # 2. Callback: metrics + saving F/X
 # -------------------------------
 class MetricsCallback(Callback):
-    """Record IGD/HV per generation and save F/X to disk at intervals."""
+    """Record IGD/IGD+/HV per generation and save F/X to disk at intervals."""
 
     def __init__(
         self,
@@ -293,6 +301,7 @@ class MetricsCallback(Callback):
         self.hv_indicator = hv_indicator
         self.metrics_every_gen = metrics_every_gen
         self.igd_history = []
+        self.igd_plus_history = []
         self.hv_history = []
         self.feasible_ratio_history = []  # fraction of pop that is feasible each gen
         self.front1_ratio_history = []
@@ -370,6 +379,19 @@ class MetricsCallback(Callback):
                 igd = self.igd_indicator(F)
             else:
                 igd = np.nan
+            # IGD+ uses the same reference PF but the IGDPlus indicator
+            if F is not None and self.igd_indicator is not None:
+                try:
+                    # assume the IGD indicator was constructed with pf; reuse it if possible
+                    pf = getattr(self.igd_indicator, "pf", None)
+                    if pf is None:
+                        igd_plus = np.nan
+                    else:
+                        igd_plus = IGDPlus(pf=pf, zero_to_one=True).do(F)
+                except Exception:
+                    igd_plus = np.nan
+            else:
+                igd_plus = np.nan
 
             if self.hv_indicator is not None:
                 hv = self.hv_indicator(F)
@@ -377,9 +399,11 @@ class MetricsCallback(Callback):
                 hv = np.nan
         else:
             igd = np.nan
+            igd_plus = np.nan
             hv = np.nan
 
         self.igd_history.append(igd)
+        self.igd_plus_history.append(igd_plus)
         self.hv_history.append(hv)
 
         if algorithm.n_iter % self.log_interval == 0:
@@ -595,11 +619,23 @@ def run_parallel_nsga3_experiment(
 
         F = res.pop.get("F")
 
-        print("  Computing final IGD/HV for summary...", flush=True)
+        print("  Computing final IGD/IGD+/HV for summary...", flush=True)
         if igd_indicator is not None:
             igd_final = igd_indicator(F)
         else:
             igd_final = np.nan
+        # final IGD+
+        if igd_indicator is not None:
+            try:
+                pf = getattr(igd_indicator, "pf", None)
+                if pf is not None:
+                    igd_plus_final = IGDPlus(pf=pf, zero_to_one=True).do(F)
+                else:
+                    igd_plus_final = np.nan
+            except Exception:
+                igd_plus_final = np.nan
+        else:
+            igd_plus_final = np.nan
 
         if hv_indicator is not None:
             hv_final = hv_indicator(F)
@@ -607,13 +643,15 @@ def run_parallel_nsga3_experiment(
             hv_final = np.nan
         print("  Final IGD/HV done.", flush=True)
 
-        print(f"{label} - finished. Final IGD = {igd_final:.6f}, HV = {hv_final:.6f}")
+        print(f"{label} - finished. Final IGD = {igd_final:.6f}, IGD+ = {igd_plus_final:.6f}, HV = {hv_final:.6f}")
 
         return (
             F,
             cb.igd_history,
+            cb.igd_plus_history,
             cb.hv_history,
             igd_final,
+            igd_plus_final,
             hv_final,
             cb.gen_times,
             cb.feasible_ratio_history,
@@ -630,8 +668,10 @@ def run_parallel_nsga3_experiment(
         M_obj = problem.n_obj
         F_nsga3 = np.empty((0, M_obj))
         igd_hist_nsga3 = []
+        igd_plus_hist_nsga3 = []
         hv_hist_nsga3 = []
         igd_nsga3 = np.nan
+        igd_plus_nsga3 = np.nan
         hv_nsga3 = np.nan
         gen_times_nsga3 = []
         feasible_ratio_history_nsga3 = []
@@ -647,7 +687,8 @@ def run_parallel_nsga3_experiment(
         )
         if nsga3_cache_path.exists():
             (
-                F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3,
+                F_nsga3, igd_hist_nsga3, igd_plus_hist_nsga3, hv_hist_nsga3,
+                igd_nsga3, igd_plus_nsga3, hv_nsga3, gen_times_nsga3,
                 feasible_ratio_history_nsga3, front1_ratio_history_nsga3, front_sizes_history_nsga3,
                 ideal_point_history_nsga3, distribution_std_history_nsga3, n_ref_covered_history_nsga3,
             ) = _load_nsga3_cache(nsga3_cache_path, igd_indicator, hv_indicator)
@@ -658,7 +699,7 @@ def run_parallel_nsga3_experiment(
                 pop_size=pop_size,
                 output=MultiObjectiveOutputLastGenOnly(metrics_every_gen=metrics_every_gen, hv_enabled=hv_enabled),
             )
-            F_nsga3, igd_hist_nsga3, hv_hist_nsga3, igd_nsga3, hv_nsga3, gen_times_nsga3, feasible_ratio_history_nsga3, front1_ratio_history_nsga3, front_sizes_history_nsga3, ideal_point_history_nsga3, distribution_std_history_nsga3, n_ref_covered_history_nsga3 = run_algorithm(
+            F_nsga3, igd_hist_nsga3, igd_plus_hist_nsga3, hv_hist_nsga3, igd_nsga3, igd_plus_nsga3, hv_nsga3, gen_times_nsga3, feasible_ratio_history_nsga3, front1_ratio_history_nsga3, front_sizes_history_nsga3, ideal_point_history_nsga3, distribution_std_history_nsga3, n_ref_covered_history_nsga3 = run_algorithm(
                 alg_nsga3,
                 label="NSGA-III",
                 algo_name="NSGA3",
@@ -668,8 +709,10 @@ def run_parallel_nsga3_experiment(
                 nsga3_cache_path,
                 F_nsga3,
                 igd_hist_nsga3,
+                igd_plus_hist_nsga3,
                 hv_hist_nsga3,
                 igd_nsga3,
+                igd_plus_nsga3,
                 hv_nsga3,
                 gen_times_nsga3,
                 feasible_ratio_history_nsga3,
@@ -690,7 +733,7 @@ def run_parallel_nsga3_experiment(
         focus_alpha=focus_alpha,
         output=MultiObjectiveOutputLastGenOnly(metrics_every_gen=metrics_every_gen, hv_enabled=hv_enabled),
     )
-    F_pnsga3, igd_hist_pnsga3, hv_hist_pnsga3, igd_pnsga3, hv_pnsga3, gen_times_pnsga3, feasible_ratio_history_pnsga3, front1_ratio_history_pnsga3, front_sizes_history_pnsga3, ideal_point_history_pnsga3, distribution_std_history_pnsga3, n_ref_covered_history_pnsga3 = run_algorithm(
+    F_pnsga3, igd_hist_pnsga3, igd_plus_hist_pnsga3, hv_hist_pnsga3, igd_pnsga3, igd_plus_pnsga3, hv_pnsga3, gen_times_pnsga3, feasible_ratio_history_pnsga3, front1_ratio_history_pnsga3, front_sizes_history_pnsga3, ideal_point_history_pnsga3, distribution_std_history_pnsga3, n_ref_covered_history_pnsga3 = run_algorithm(
         alg_pnsga3,
         label="ParallelNSGA3",
         algo_name="ParallelNSGA3",
@@ -706,6 +749,7 @@ def run_parallel_nsga3_experiment(
     fs_arr_pnsga3[:] = front_sizes_history_pnsga3
     pnsga3_plot_data = {
         "igd_history": np.array(igd_hist_pnsga3),
+        "igd_plus_history": np.array(igd_plus_hist_pnsga3),
         "hv_history": np.array(hv_hist_pnsga3),
         "gen_times": np.array(gen_times_pnsga3),
         "feasible_ratio_history": np.array(feasible_ratio_history_pnsga3),
