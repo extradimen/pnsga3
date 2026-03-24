@@ -2,21 +2,32 @@
 # Each experiment is a grid over the listed parameters; use lists for multiple values.
 
 experiments:
-  - name: c1dtlz1_13_16_19
+  - name: c1dtlz1_popsize_vs_n_island 
     # -------------------------------------------------------------------------
     # Problem and decision variables
     # -------------------------------------------------------------------------
     problem: c1dtlz1          # Problem name (e.g. c1dtlz1, dtlz1)
     n_var: [12]               # Number of decision variables (list for grid)
 
+    # reference parameters
+    # n_obj: [10]
+    # pop_size: [5000]          
+    # n_gen: [500]              
+    # n_partitions: [3]        
+    # n_islands: [5]           
+    # migration_interval: [5] 
+    # migration_rate: [0.1]    
+    # seed: [1] 
+    # focus_alpha: [0.1] 
+    
     # -------------------------------------------------------------------------
     # Objectives and algorithm parameters (grid over these lists)
     # -------------------------------------------------------------------------
-    n_obj: [14,15,16,17,18,19,20,21,22,23]         # Number of objectives
-    pop_size: [100,200,300,400,500,600]          # Population size
-    n_gen: [50]              # Number of generations
+    n_obj: [10]         # Number of objectives
+    pop_size: [3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000]          # Population size
+    n_gen: [500]              # Number of generations
     n_partitions: [3]        # Reference direction partitions (N = C(n_obj + n_partitions - 1, n_partitions))
-    n_islands: [2,3,4,5,6,7,8,9,10]           # Number of islands in ParallelNSGA3
+    n_islands: [5,6,7,8,9,10]           # Number of islands in ParallelNSGA3
     migration_interval: [5] # Generations between migrations
     migration_rate: [0.1]    # Fraction of population to migrate (0.0–1.0)
     seed: [1]                # Random seed(s); multiple seeds = multiple runs per config
@@ -27,10 +38,10 @@ experiments:
     # pnsga3_only:
     #   true  = Run only ParallelNSGA3; skip NSGA3 baseline (faster for PNSGA3-only experiments)
     #   false = Run both NSGA3 and ParallelNSGA3 for comparison
-    pnsga3_only: false
+    pnsga3_only: true
 
     # output_dir: Directory for logs, caches, SUMMARY/*.npy (default: exp_logs)
-    output_dir: exp_logs
+    output_dir: exp_02_logs
 
     # metrics_every_gen:
     #   true  = Compute IGD/HV every generation (needed for line plots over generations)
@@ -56,4 +67,4 @@ experiments:
     #   0.0  = Original ParallelNSGA3 (no per-island objective focus; survival uses raw objectives)
     #   >0   = For each island, upweight a fixed subset of objectives during survival/selection only
     #         (objectives are distributed approximately evenly across islands; IGD/HV still use raw objectives).
-    focus_alpha: [0.0, 0.025, 0.05, 0.075, 0.1, 0.125,0.15, 0.175, 0.2]
+    focus_alpha: [0.1]
